@@ -7,7 +7,6 @@ This repository completes the 3-week Cybersecurity Internship task by:
 3. Implementing industry-standard security fixes
 4. Adding logging, rate limiting, and best practices
 
-**Original Vulnerable App Used:** https://github.com/appsecco/vulnerable-node-application  
 (Contains XSS, SQL Injection, plain-text passwords, no input validation, etc.)
 
 ## Vulnerabilities Found (Week 1)
