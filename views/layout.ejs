@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Clearway Cyber</title>
+    <link href="/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/css/style.css" rel="stylesheet">
+</head>
+<body class="bg-dark text-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/">Clearway Cyber</a>
+            <div class="ms-auto">
+                <% if (!user) { %>
+                    <a href="/login" class="btn btn-outline-light me-2">Login</a>
+                    <a href="/signup" class="btn btn-light">Signup</a>
+                <% } else { %>
+                    <a href="/profile" class="btn btn-outline-light me-2">Profile</a>
+                    <a href="/logout" class="btn btn-outline-danger">Logout</a>
+                <% } %>
+            </div>
+        </div>
+    </nav>
+    <div class="container mt-4">
+        <% if (locals.error) { %>
+            <div class="alert alert-danger"><%= error %></div>
+        <% } %>
+        <%- body %>
+    </div>
+    <script src="/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
