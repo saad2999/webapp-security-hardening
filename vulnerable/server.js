@@ -54,17 +54,22 @@ app.get('/profile', (req, res) => {
 });
 app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('/'); });
 
+// ⚠️ Educational example only — vulnerable pattern
 app.post('/login', (req, res) => {
     const { email = '', password = '' } = req.body;
-    // use parameterized query to avoid SQL injection
-    db.query('SELECT * FROM users WHERE email = ? AND password = ?', [email, password], (err, results) => {
+
+    // ❌ Vulnerable: direct string concatenation
+    const query = `SELECT * FROM users WHERE email = '${email}' AND password = '${password}'`;
+
+    db.query(query, (err, results) => {
         if (err || results.length === 0) {
-            return res.redirect('/login?error=Invalid%20login%20or%20SQLi%20detected');
+            return res.redirect('/login?error=Invalid%20credentials');
         }
         req.session.user = results[0];
         res.redirect('/profile');
     });
 });
+
 
 app.post('/signup', (req, res) => {
     const { email, password, name, bio } = req.body;
@@ -96,9 +101,9 @@ app.post('/change-password', (req, res) => {
         res.redirect('/profile?success=Password+changed+(plaintext!)');
     });
 });
-app.listen(3000, () => {
-    console.log('\nCLEARWAY CYBER - WEEK 1 FINAL - 100% WORKING');
-    console.log('http://localhost:3000');
+app.listen(4000, () => {
+    console.log('weak \nCLEARWAY CYBER - WEEK 1 FINAL - 100% WORKING');
+    console.log('http://localhost:4000');
     console.log('SQLi: admin@clearway.com\' OR \'1\'=\'1');
     console.log('XSS: <script>alert("HIRED")</script>');
 });
