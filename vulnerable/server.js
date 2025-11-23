@@ -56,8 +56,8 @@ app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('/'); });
 
 app.post('/login', (req, res) => {
     const { email = '', password = '' } = req.body;
-    const query = `SELECT * FROM users WHERE email = '${email}' AND password = '${password}'`;
-    db.query(query, (err, results) => {
+    // use parameterized query to avoid SQL injection
+    db.query('SELECT * FROM users WHERE email = ? AND password = ?', [email, password], (err, results) => {
         if (err || results.length === 0) {
             return res.redirect('/login?error=Invalid%20login%20or%20SQLi%20detected');
         }
@@ -68,8 +68,7 @@ app.post('/login', (req, res) => {
 
 app.post('/signup', (req, res) => {
     const { email, password, name, bio } = req.body;
-    const query = `INSERT INTO users (email, password, name, bio) VALUES ('${email}', '${password}', '${name}', '${bio}')`;
-    db.query(query, err => {
+    db.query('INSERT INTO users (email, password, name, bio) VALUES (?, ?, ?, ?)', [email, password, name, bio], err => {
         if (err) return res.redirect('/signup?error=Email%20exists');
         res.redirect('/login');
     });
@@ -78,16 +77,8 @@ app.post('/signup', (req, res) => {
 app.post('/update-bio', (req, res) => {
     if (!req.session.user) return res.redirect('/login');
     const bio = req.body.bio || '';
-    db.query(`UPDATE users SET bio = '${bio}' WHERE id = ${req.session.user.id}`);
-    req.session.user.bio = bio;
-    res.redirect('/profile');
-});
-// UPDATE BIO (XSS VULNERABLE)
-app.post('/update-bio', (req, res) => {
-    if (!req.session.user) return res.redirect('/login');
-    const bio = req.body.bio || '';
     const id = req.session.user.id;
-    db.query(`UPDATE users SET bio = '${bio}' WHERE id = ${id}`, (err) => {
+    db.query('UPDATE users SET bio = ? WHERE id = ?', [bio, id], (err) => {
         if (err) console.log(err);
         req.session.user.bio = bio;
         res.redirect('/profile?success=Bio+updated');
@@ -99,7 +90,7 @@ app.post('/change-password', (req, res) => {
     if (!req.session.user) return res.redirect('/login');
     const newPassword = req.body.newPassword;
     const id = req.session.user.id;
-    db.query(`UPDATE users SET password = '${newPassword}' WHERE id = ${id}`, (err) => {
+    db.query('UPDATE users SET password = ? WHERE id = ?', [newPassword, id], (err) => {
         if (err) console.log(err);
         req.session.user.password = newPassword;
         res.redirect('/profile?success=Password+changed+(plaintext!)');

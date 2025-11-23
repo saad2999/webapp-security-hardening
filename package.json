@@ -1,23 +1,42 @@
 {
   "name": "vuln-auth-simple",
   "version": "1.0.0",
-  "description": "",
+  "description": "## Overview This repository completes the 3-week Cybersecurity Internship task by: 1. Assessing a deliberately vulnerable Node.js web application 2. Identifying critical vulnerabilities using manual testing + OWASP ZAP 3. Implementing industry-standard security fixes 4. Adding logging, rate limiting, and best practices",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@popperjs/core": "^2.11.8",
+    "bcrypt": "^5.1.0",
+    "bcryptjs": "^3.0.3",
     "body-parser": "^2.2.0",
     "bootstrap": "^5.3.8",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "ejs": "^3.1.10",
     "express": "^5.1.0",
     "express-ejs-layouts": "^2.5.1",
+    "express-rate-limit": "^8.2.1",
     "express-session": "^1.18.2",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.1",
-    "mysql2": "^3.15.3"
-  }
+    "mysql2": "^3.15.3",
+    "validator": "^13.15.23",
+    "winston": "^3.9.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saad2999/webapp-security-hardening.git"
+  },
+  "bugs": {
+    "url": "https://github.com/saad2999/webapp-security-hardening/issues"
+  },
+  "homepage": "https://github.com/saad2999/webapp-security-hardening#readme"
 }
