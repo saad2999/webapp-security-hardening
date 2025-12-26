@@ -1,0 +1,11 @@
+# Fail2Ban jail config for Clearway app
+[clearway-auth]
+enabled  = true
+filter   = clearway-auth
+# Point this to the app log file (adjust path if you run the app elsewhere)
+logpath  = /rootspace/Downloads/webapp-security-hardening/security.log
+maxretry = 5
+findtime = 900        # 15 minutes
+bantime  = 3600       # 1 hour
+port     = http,https
+action   = %(action_mwl)s

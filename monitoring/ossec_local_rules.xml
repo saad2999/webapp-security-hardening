@@ -1,0 +1,14 @@
+<group name="clearway">
+  <!-- Rule for failed login attempts -->
+  <rule id="100200" level="10">
+    <if_sid>100000</if_sid>
+    <match>FAILED_LOGIN</match>
+    <description>Clearway failed login detected</description>
+  </rule>
+
+  <!-- Rule for account lockouts -->
+  <rule id="100201" level="12">
+    <match>ACCOUNT_LOCK</match>
+    <description>Clearway account lockout detected</description>
+  </rule>
+</group>

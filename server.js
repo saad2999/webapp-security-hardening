@@ -7,16 +7,19 @@ const morgan = require('morgan');
 const expressLayout = require('express-ejs-layouts');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const winston = require('winston');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const validator = require('./validator');
 const validatorLib = require('validator');
+const ids = require('./ids');
 
 const app = express();
 
 // MUST BE BEFORE view engine
 app.use(expressLayout);
+
 app.set('layout', 'layout');
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -34,7 +37,82 @@ app.use(session({
 app.use(cookieParser());
 
 // Helmet secures HTTP headers
-app.use(helmet());
+app.use(helmet.strictTransportSecurity({
+    maxAge: 63072000,        // 2 years recommended for strong security
+    includeSubDomains: true,
+    preload: true            // If you plan to submit to hstspreload.org
+}));
+
+// Content Security Policy: conservative defaults, adjust as needed for your app
+app.use(helmet.contentSecurityPolicy({
+    useDefaults: true,
+    directives: {
+        // keep default directives but allow styles/scripts from self
+        "default-src": ["'self'"],
+        "script-src": ["'self'", "https:"],
+        "style-src": ["'self'", "https:", "'unsafe-inline'"],
+        "img-src": ["'self'", "data:", "https:"],
+        "connect-src": ["'self'"],
+        "frame-ancestors": ["'none'"]
+    }
+}));
+
+// Simple in-memory account lockout tracker (keep in-memory -> ephemeral)
+const failedLoginAttempts = new Map();
+const MAX_FAILED = 5; // lock after 5 failed attempts
+const LOCK_MINUTES = 15; // lockout duration
+
+function isLocked(email) {
+    const record = failedLoginAttempts.get(email);
+    if (!record) return false;
+    if (record.lockedUntil && Date.now() < record.lockedUntil) return true;
+    return false;
+}
+
+function recordFailedAttempt(email) {
+    let record = failedLoginAttempts.get(email) || { count: 0 };
+    record.count = (record.count || 0) + 1;
+    record.lastAttempt = Date.now();
+    if (record.count >= MAX_FAILED) {
+        record.lockedUntil = Date.now() + LOCK_MINUTES * 60 * 1000;
+        logger.warn('Account locked due to repeated failed logins', { email, lockedUntil: record.lockedUntil });
+    }
+    failedLoginAttempts.set(email, record);
+}
+
+function resetFailedAttempts(email) {
+    failedLoginAttempts.delete(email);
+}
+
+// Rate limiting
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 200, // limit each IP to 200 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+        logger.warn('Global rate limit exceeded', { ip: req.ip });
+        res.status(429).send('Too many requests, please try again later.');
+    }
+});
+
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10, // allow some attempts per IP window
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+        logger.warn('Too many login attempts from IP', { ip: req.ip });
+        res.status(429).redirect('/login?error=Too+many+requests');
+    }
+});
+
+app.use(globalLimiter);
+
+// health endpoint for monitoring
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', time: Date.now() });
+});
 
 // Winston logger setup
 const logger = winston.createLogger({
@@ -48,13 +126,17 @@ const logger = winston.createLogger({
     ),
     transports: [
         new winston.transports.Console(),
-        new winston.transports.File({ filename: 'security.log' })
+        new winston.transports.File({ filename: 'security.log' }),
+        new winston.transports.File({ filename: 'alerts.log', level: 'warn' })
     ]
 });
 
+// expose logger on app for IDS to use
+app.set('logger', logger);
+
 // SECURITY CONFIG: pepper and JWT secret. Replace these with secure env vars in production.
-const PEPPER = process.env.PEPPER || 'please-change-this-pepper';
-const JWT_SECRET = process.env.JWT_SECRET || 'please-change-this-jwt-secret';
+const PEPPER = process.env.PEPPER || 'pepper2';
+const JWT_SECRET = process.env.JWT_SECRET || 'jwt-secret';
 const SALT_ROUNDS = 12;
 
 app.use((req, res, next) => {
@@ -111,20 +193,39 @@ app.get('/logout', (req, res) => {
     res.redirect('/');
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', loginLimiter, async (req, res) => {
     try {
         const { email = '', password = '' } = req.body;
         // use validator library for email check
         if (!validatorLib.isEmail(String(email)) || !password) return res.redirect('/login?error=Invalid%20login');
+        if (isLocked(email)) {
+            logger.warn('Login attempt to locked account', { email, ip: req.ip });
+            return res.redirect('/login?error=Account%20locked');
+        }
         // fetch user by email, then compare hashed password
         db.query('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
             if (err || results.length === 0) {
+                // record failed attempt (possible invalid email)
+                try { recordFailedAttempt(email); } catch (e) { }
+                logger.warn('Invalid login (no such user or db error)', { email, ip: req.ip });
+                // compact line for external IDS (Fail2Ban)
+                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=nosuchuser`);
                 return res.redirect('/login?error=Invalid%20login');
             }
             const user = results[0];
             try {
                 const ok = await bcrypt.compare(password + PEPPER, user.password);
-                if (!ok) return res.redirect('/login?error=Invalid%20login');
+                if (!ok) {
+                    recordFailedAttempt(email);
+                    logger.warn('Invalid login (bad password)', { email, ip: req.ip });
+                    // compact line for Fail2Ban
+                    logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=badpassword`);
+                    return res.redirect('/login?error=Invalid%20login');
+                }
+                // successful login, reset failed attempts
+                resetFailedAttempts(email);
+                // compact success line
+                logger.info(`SUCCESSFUL_LOGIN email=${email} ip=${req.ip}`);
                 const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
                 const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
                 // set httpOnly cookie for web app; secure in production
@@ -134,6 +235,7 @@ app.post('/login', async (req, res) => {
                 logger.info('User logged in', { userId: payloadUser.id, email: payloadUser.email, ip: req.ip });
                 res.redirect('/profile');
             } catch (e) {
+                logger.error('Error during login flow', { error: e && e.message, email, ip: req.ip });
                 return res.redirect('/login?error=Invalid%20login');
             }
         });
@@ -142,7 +244,7 @@ app.post('/login', async (req, res) => {
     }
 });
 
-app.post('/signup', async (req, res) => {
+app.post('/signup', ids.idsMiddleware, async (req, res) => {
     try {
         let { email, password, name, bio } = req.body;
         if (!email || !password) return res.redirect('/signup?error=Missing%20fields');
@@ -168,7 +270,7 @@ app.post('/signup', async (req, res) => {
     }
 });
 
-app.post('/update-bio', (req, res) => {
+app.post('/update-bio', ids.idsMiddleware, (req, res) => {
     // require authenticated user
     const currentUser = res.locals.user || req.session.user;
     if (!currentUser) return res.redirect('/login');
@@ -191,7 +293,7 @@ app.post('/update-bio', (req, res) => {
 });
 
 // CHANGE PASSWORD (PLAINTEXT VULNERABLE)
-app.post('/change-password', async (req, res) => {
+app.post('/change-password', ids.idsMiddleware, async (req, res) => {
     try {
         const currentUser = res.locals.user || req.session.user;
         if (!currentUser) return res.redirect('/login');
