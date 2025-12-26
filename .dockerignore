@@ -1,0 +1,12 @@
+.git
+node_modules
+npm - debug.log
+    .env
+coverage
+logs
+    *.log
+monitoring/*.local
+monitoring/*.conf
+/.vscode
+Dockerfile
+README.md

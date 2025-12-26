@@ -3,14 +3,59 @@
         <div class="card bg-black border-success">
             <div class="card-body p-5">
                 <h2 class="text-center mb-4 text-success">Signup</h2>
-                <form method="POST">
-                    <input type="email" name="email" class="form-control mb-3" placeholder="Email" required>
-                    <input type="text" name="name" class="form-control mb-3" placeholder="Name">
-                    <input type="password" name="password" class="form-control mb-3" placeholder="Password" required>
-                    <small class="text-light mb-3">Password requirements: at least 8 characters, include an uppercase letter, a lowercase letter, a digit, and a symbol</small>
-                    <textarea name="bio" class="form-control mb-3 mt-5" placeholder="Bio "></textarea>
-                    <button class="btn btn-success w-100">Create Account</button>
+                <form method="POST" action="/signup">
+                    <% if (typeof csrfToken !=='undefined' ) { %>
+                        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                        <% } %>
+                            <input type="email" name="email" class="form-control mb-3" placeholder="Email" required>
+                            <input type="text" name="name" class="form-control mb-3" placeholder="Name">
+                            <input id="password" type="password" name="password" class="form-control mb-3"
+                                placeholder="Password" required>
+                            <small id="passwordHelp" class="text-light mb-3">Password requirements: at least 8
+                                characters, include an uppercase letter, a lowercase letter, a digit, and a
+                                symbol</small>
+                            <ul id="pwd-rules" class="list-unstyled small text-muted mb-3">
+                                <li id="rule-lower">• At least one lowercase letter</li>
+                                <li id="rule-upper">• At least one uppercase letter</li>
+                                <li id="rule-number">• At least one number</li>
+                                <li id="rule-symbol">• At least one symbol (e.g. !@#$%)</li>
+                                <li id="rule-length">• At least 8 characters</li>
+                            </ul>
+                            <textarea name="bio" class="form-control mb-3 mt-5" placeholder="Bio "></textarea>
+                            <button class="btn btn-success w-100">Create Account</button>
                 </form>
+                <script>
+                    (function () {
+                        var pwd = document.getElementById('password');
+                        if (!pwd) return;
+                        var rules = {
+                            lower: document.getElementById('rule-lower'),
+                            upper: document.getElementById('rule-upper'),
+                            number: document.getElementById('rule-number'),
+                            symbol: document.getElementById('rule-symbol'),
+                            length: document.getElementById('rule-length')
+                        };
+                        function test(value) {
+                            var hasLower = /[a-z]/.test(value);
+                            var hasUpper = /[A-Z]/.test(value);
+                            var hasNumber = /[0-9]/.test(value);
+                            var hasSymbol = /[^A-Za-z0-9]/.test(value);
+                            var hasLength = value && value.length >= 8;
+                            update(rules.lower, hasLower);
+                            update(rules.upper, hasUpper);
+                            update(rules.number, hasNumber);
+                            update(rules.symbol, hasSymbol);
+                            update(rules.length, hasLength);
+                        }
+                        function update(node, ok) {
+                            if (!node) return;
+                            node.style.color = ok ? '#28a745' : '';
+                            node.style.fontWeight = ok ? '600' : '';
+                        }
+                        pwd.addEventListener('input', function (e) { test(e.target.value); });
+                        document.addEventListener('DOMContentLoaded', function () { test(pwd.value); });
+                    })();
+                </script>
             </div>
         </div>
     </div>

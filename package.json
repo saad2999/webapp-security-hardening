@@ -4,8 +4,7 @@
   "description": "## Overview This repository completes the 3-week Cybersecurity Internship task by: 1. Assessing a deliberately vulnerable Node.js web application 2. Identifying critical vulnerabilities using manual testing + OWASP ZAP 3. Implementing industry-standard security fixes 4. Adding logging, rate limiting, and best practices",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "test": "jest --color"
   },
   "keywords": [],
   "author": "",
@@ -18,6 +17,7 @@
     "bootstrap": "^5.3.8",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
+    "csurf": "^1.11.0",
     "dotenv": "^17.2.3",
     "ejs": "^3.1.10",
     "express": "^5.1.0",
@@ -33,9 +33,6 @@
   },
   "devDependencies": {
     "jest": "^29.6.1"
-  },
-  "scripts": {
-    "test": "jest --color"
   },
   "repository": {
     "type": "git",
