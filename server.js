@@ -32,6 +32,22 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
+// Winston Logger (Initialize FIRST)
+const logger = winston.createLogger({
+    level: process.env.LOG_LEVEL || 'info',
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.printf(({ timestamp, level, message, ...meta }) => {
+            const metaStr = Object.keys(meta).length ? JSON.stringify(meta) : '';
+            return `${timestamp} [${level}] ${message} ${metaStr}`;
+        })
+    ),
+    transports: [
+        new winston.transports.Console()
+    ]
+});
+app.set('logger', logger);
+
 // Session with secure config
 app.use(session({
     secret: process.env.SESSION_SECRET || 'clearway-2025-fallback-secret',
@@ -108,24 +124,6 @@ const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHe
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 app.use(globalLimiter);
 
-// Winston Logger
-const logger = winston.createLogger({
-    level: process.env.LOG_LEVEL || 'info',
-    format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.printf(({ timestamp, level, message, ...meta }) => {
-            const metaStr = Object.keys(meta).length ? JSON.stringify(meta) : '';
-            return `${timestamp} [${level}] ${message} ${metaStr}`;
-        })
-    ),
-    transports: [
-        new winston.transports.Console(),
-        new winston.transports.File({ filename: 'security.log' }),
-        new winston.transports.File({ filename: 'alerts.log', level: 'warn' })
-    ]
-});
-app.set('logger', logger);
-
 // Secrets
 const PEPPER = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025DoNotShare!@#';
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in-production';
@@ -153,37 +151,76 @@ app.use((req, res, next) => {
 });
 
 // Database Connection – Cloud Run Compatible with Unix Socket
+logger.info('🔧 Configuring database connection...');
+logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+logger.info(`INSTANCE_CONNECTION_NAME: ${process.env.INSTANCE_CONNECTION_NAME || 'NOT SET'}`);
+
 const dbConfig = {
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'Clearway_Cyber_db'
+    database: process.env.DB_NAME || 'Clearway_Cyber_db',
+    connectTimeout: 10000,
+    charset: 'utf8mb4'
 };
 
 // Use Unix socket on Cloud Run, TCP locally
-if (process.env.NODE_ENV === 'production' && process.env.INSTANCE_CONNECTION_NAME) {
+if (process.env.INSTANCE_CONNECTION_NAME) {
     // Cloud Run with Unix socket
     dbConfig.socketPath = `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}`;
-    logger.info(`Connecting to Cloud SQL via Unix socket: ${dbConfig.socketPath}`);
+    logger.info(`✅ Using Cloud SQL Unix socket: ${dbConfig.socketPath}`);
 } else {
     // Local development with TCP
     dbConfig.host = process.env.DB_HOST || '127.0.0.1';
-    logger.info(`Connecting to MySQL via TCP: ${dbConfig.host}`);
+    dbConfig.port = process.env.DB_PORT || 3306;
+    logger.info(`✅ Using MySQL TCP connection: ${dbConfig.host}:${dbConfig.port}`);
 }
 
-const db = mysql.createConnection(dbConfig);
+let db;
+let dbConnected = false;
 
-db.connect(err => {
-    if (err) {
-        logger.warn("Initial DB connection failed – will retry on queries", { error: err.message, code: err.code });
-    } else {
-        logger.info("DB Connected Successfully on startup");
-    }
-});
+function createDatabaseConnection() {
+    db = mysql.createConnection(dbConfig);
+
+    db.on('error', (err) => {
+        logger.error('Database connection error:', { error: err.message, code: err.code });
+        dbConnected = false;
+        
+        // Attempt to reconnect
+        if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
+            logger.info('Attempting to reconnect to database...');
+            setTimeout(createDatabaseConnection, 2000);
+        }
+    });
+
+    db.connect(err => {
+        if (err) {
+            logger.error("❌ Database connection failed:", { 
+                error: err.message, 
+                code: err.code,
+                socketPath: dbConfig.socketPath,
+                host: dbConfig.host 
+            });
+            dbConnected = false;
+        } else {
+            logger.info("✅ Database connected successfully!");
+            dbConnected = true;
+        }
+    });
+}
+
+createDatabaseConnection();
 
 // Health check – accurate DB status
 app.get('/health', (req, res) => {
-    const dbStatus = (db && db.state === 'authenticated') ? 'connected' : 'disconnected';
-    res.json({ status: 'ok', time: Date.now(), database: dbStatus });
+    const dbStatus = dbConnected && db && db.state === 'authenticated' ? 'connected' : 'disconnected';
+    res.json({ 
+        status: 'ok', 
+        time: Date.now(), 
+        database: dbStatus,
+        environment: process.env.NODE_ENV || 'development',
+        socketPath: dbConfig.socketPath || 'N/A',
+        host: dbConfig.host || 'N/A'
+    });
 });
 
 // Safe query wrapper – fully protected with retry and try/catch
@@ -193,12 +230,24 @@ const safeQuery = (sql, params = [], callback) => {
         return callback(new Error("DB not ready"), null);
     }
 
+    if (!dbConnected) {
+        logger.warn("DB not connected, attempting query anyway");
+    }
+
     try {
         db.query(sql, params, (err, results) => {
-            if (err && ['ECONNRESET', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST'].includes(err.code)) {
-                logger.warn("Transient DB error – retrying once");
-                setTimeout(() => db.query(sql, params, callback), 1000);
-                return;
+            if (err) {
+                logger.error("Query error:", { error: err.message, code: err.code, sql: sql.substring(0, 100) });
+                
+                if (['ECONNRESET', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST'].includes(err.code)) {
+                    logger.warn("Transient DB error – retrying once");
+                    dbConnected = false;
+                    setTimeout(() => {
+                        createDatabaseConnection();
+                        setTimeout(() => db.query(sql, params, callback), 1000);
+                    }, 1000);
+                    return;
+                }
             }
             callback(err, results || []);
         });
@@ -232,10 +281,16 @@ app.post('/login', loginLimiter, (req, res) => {
     }
 
     safeQuery('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
-        if (err || results.length === 0) {
+        if (err) {
+            logger.error(`Database error during login for ${email}:`, { error: err.message });
+            return res.redirect('/login?error=Service%20unavailable');
+        }
+        
+        if (results.length === 0) {
             logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip}`);
             return res.redirect('/login?error=Invalid%20login');
         }
+        
         const user = results[0];
         const ok = await bcrypt.compare(password + PEPPER, user.password);
         if (!ok) {
@@ -372,10 +427,14 @@ app.use((err, req, res, next) => {
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-    logger.info('CLEARWAY CYBER - WEEK 5 COMPLETE: SQLi & CSRF PROTECTED......');
-    logger.info(`Server running at http://localhost:${PORT}`);
-    logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    logger.info(`Database connection: ${process.env.INSTANCE_CONNECTION_NAME ? 'Cloud SQL (Unix socket)' : 'Local MySQL (TCP)'}`);
-    logger.info('CSRF tokens required on all state-changing requests.');
-    logger.info('Ready for Burp Suite testing and ethical hacking report.');
+    logger.info('═══════════════════════════════════════════════════════════');
+    logger.info('🚀 CLEARWAY CYBER - WEEK 5 COMPLETE: SQLi & CSRF PROTECTED');
+    logger.info('═══════════════════════════════════════════════════════════');
+    logger.info(`📍 Server running on port: ${PORT}`);
+    logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`🔌 Connection: ${process.env.INSTANCE_CONNECTION_NAME ? 'Cloud SQL (Unix socket)' : 'Local MySQL (TCP)'}`);
+    logger.info(`🗄️  Database: ${dbConfig.database}`);
+    logger.info(`🔒 CSRF tokens required on all state-changing requests`);
+    logger.info('✅ Ready for Burp Suite testing and ethical hacking report');
+    logger.info('═══════════════════════════════════════════════════════════');
 });
