@@ -108,12 +108,6 @@ const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHe
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 app.use(globalLimiter);
 
-// Health check – accurate DB status
-app.get('/health', (req, res) => {
-    const dbStatus = (db && db.state === 'authenticated') ? 'connected' : 'disconnected';
-    res.json({ status: 'ok', time: Date.now(), database: dbStatus });
-});
-
 // Winston Logger
 const logger = winston.createLogger({
     level: process.env.LOG_LEVEL || 'info',
@@ -158,20 +152,38 @@ app.use((req, res, next) => {
     next();
 });
 
-// Database Connection – NON-FATAL
-const db = mysql.createConnection({
-    host: process.env.DB_HOST || '127.0.0.1',
+// Database Connection – Cloud Run Compatible with Unix Socket
+const dbConfig = {
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'Clearway_Cyber_db'
-});
+};
+
+// Use Unix socket on Cloud Run, TCP locally
+if (process.env.NODE_ENV === 'production' && process.env.INSTANCE_CONNECTION_NAME) {
+    // Cloud Run with Unix socket
+    dbConfig.socketPath = `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}`;
+    logger.info(`Connecting to Cloud SQL via Unix socket: ${dbConfig.socketPath}`);
+} else {
+    // Local development with TCP
+    dbConfig.host = process.env.DB_HOST || '127.0.0.1';
+    logger.info(`Connecting to MySQL via TCP: ${dbConfig.host}`);
+}
+
+const db = mysql.createConnection(dbConfig);
 
 db.connect(err => {
     if (err) {
-        logger.warn("Initial DB connection failed – will retry on queries", { error: err.message });
+        logger.warn("Initial DB connection failed – will retry on queries", { error: err.message, code: err.code });
     } else {
         logger.info("DB Connected Successfully on startup");
     }
+});
+
+// Health check – accurate DB status
+app.get('/health', (req, res) => {
+    const dbStatus = (db && db.state === 'authenticated') ? 'connected' : 'disconnected';
+    res.json({ status: 'ok', time: Date.now(), database: dbStatus });
 });
 
 // Safe query wrapper – fully protected with retry and try/catch
@@ -362,6 +374,8 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
     logger.info('CLEARWAY CYBER - WEEK 5 COMPLETE: SQLi & CSRF PROTECTED......');
     logger.info(`Server running at http://localhost:${PORT}`);
+    logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`Database connection: ${process.env.INSTANCE_CONNECTION_NAME ? 'Cloud SQL (Unix socket)' : 'Local MySQL (TCP)'}`);
     logger.info('CSRF tokens required on all state-changing requests.');
     logger.info('Ready for Burp Suite testing and ethical hacking report.');
 });
