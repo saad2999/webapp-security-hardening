@@ -21,6 +21,9 @@ const csrf = require('@dr.pogodin/csurf');
 
 const app = express();
 
+// Trust proxy for Cloud Run load balancer (fixes rate-limit warning)
+app.set('trust proxy', 1);
+
 // Layouts and views
 app.use(expressLayout);
 app.set('layout', 'layout');
@@ -107,8 +110,9 @@ app.use((req, res, next) => {
 const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 app.use(globalLimiter);
+app.use('/login', loginLimiter);
 
-// Health check – shows DB status
+// Health check – accurate DB status
 app.get('/health', (req, res) => {
     const dbStatus = (db && db.state === 'authenticated') ? 'connected' : 'disconnected';
     res.json({ status: 'ok', time: Date.now(), database: dbStatus });
@@ -158,7 +162,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Database Connection – NON-FATAL for Cloud Run
+// Database Connection – NON-FATAL
 const db = mysql.createConnection({
     host: process.env.DB_HOST || '127.0.0.1',
     user: process.env.DB_USER || 'root',
@@ -168,28 +172,33 @@ const db = mysql.createConnection({
 
 db.connect(err => {
     if (err) {
-        logger.warn("Initial DB connection failed – retrying on queries (normal during Cloud Run startup)", { 
-            error: err.message || err 
+        logger.error("Initial DB connection failed – check DB_PASSWORD and permissions!", { 
+            code: err.code, 
+            message: err.message 
         });
-        // NEVER exit – Cloud Run sidecar proxy may not be ready yet
     } else {
         logger.info("DB Connected Successfully on startup");
     }
 });
 
-// Safe query wrapper with retry logic for transient startup issues
-const safeQuery = (sql, params, callback, retries = 3) => {
-    db.query(sql, params, (err, results) => {
-        if (err && retries > 0 && ['ECONNRESET', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST'].includes(err.code)) {
-            logger.warn(`Transient DB error – retrying ${retries} more times`, { code: err.code });
-            setTimeout(() => safeQuery(sql, params, callback, retries - 1), 1000);
-            return;
-        }
-        if (err) {
-            logger.error("DB query failed", { sql: sql.substring(0, 100), error: err.message });
-        }
-        callback(err, results || []);
-    });
+// Safe query wrapper – robust for Cloud Run
+const safeQuery = (sql, params = [], callback) => {
+    if (!db || db.state === 'disconnected' || !db.query) {
+        logger.warn("DB not ready for query");
+        return callback(new Error("Database not connected"), null);
+    }
+
+    try {
+        db.query(sql, params, (err, results) => {
+            if (err) {
+                logger.error("Query execution failed", { sql: sql.substring(0, 100), code: err.code, message: err.message });
+            }
+            callback(err, results || []);
+        });
+    } catch (e) {
+        logger.error("Critical query error", { error: e.message });
+        callback(e, null);
+    }
 };
 
 // Routes
@@ -209,36 +218,31 @@ app.get('/logout', (req, res) => {
 });
 
 // Login
-app.post('/login', loginLimiter, async (req, res) => {
-    try {
-        const { email = '', password = '' } = req.body;
-        if (!validatorLib.isEmail(String(email)) || !password) {
+app.post('/login', (req, res) => {
+    const { email = '', password = '' } = req.body;
+    if (!validatorLib.isEmail(String(email)) || !password) {
+        return res.redirect('/login?error=Invalid%20login');
+    }
+
+    safeQuery('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
+        if (err || results.length === 0) {
+            logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip}`);
             return res.redirect('/login?error=Invalid%20login');
         }
+        const user = results[0];
+        const ok = await bcrypt.compare(password + PEPPER, user.password);
+        if (!ok) {
+            logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=wrong_password`);
+            return res.redirect('/login?error=Invalid%20login');
+        }
+        logger.info(`SUCCESSFUL_LOGIN email=${email} ip=${req.ip}`);
 
-        safeQuery('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
-            if (err || results.length === 0) {
-                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=no_user_or_db_error`);
-                return res.redirect('/login?error=Invalid%20login');
-            }
-            const user = results[0];
-            const ok = await bcrypt.compare(password + PEPPER, user.password);
-            if (!ok) {
-                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=wrong_password`);
-                return res.redirect('/login?error=Invalid%20login');
-            }
-            logger.info(`SUCCESSFUL_LOGIN email=${email} ip=${req.ip}`);
-
-            const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
-            const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
-            res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
-            req.session.user = payloadUser;
-            res.redirect('/profile');
-        });
-    } catch (e) {
-        logger.error("Login exception", { error: e.message });
-        res.redirect('/login?error=Server%20error');
-    }
+        const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
+        const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
+        res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
+        req.session.user = payloadUser;
+        res.redirect('/profile');
+    });
 });
 
 // Signup
@@ -256,13 +260,13 @@ app.post('/signup', ids.idsMiddleware, csrfProtection, async (req, res) => {
 
         const hashed = await bcrypt.hash(password + PEPPER, SALT_ROUNDS);
 
-        safeQuery('INSERT INTO users (email, password, name, bio) VALUES (?, ?, ?, ?)', [email, hashed, name, bio], (err, result) => {
+        safeQuery('INSERT INTO users (email, password, name, bio) VALUES (?, ?, ?, ?)', [email, hashed, name, bio], (err) => {
             if (err) {
                 if (err.code === 'ER_DUP_ENTRY') {
                     return res.redirect('/signup?error=Email%20exists');
                 }
-                logger.error("Signup failed", { error: err.message });
-                return res.redirect('/signup?error=Service%20temporarily%20unavailable');
+                logger.error("Signup failed – check DB connection/password", { code: err.code, message: err.message });
+                return res.redirect('/signup?error=Registration%20failed%20(check%20logs)');
             }
             logger.info(`New user registered: ${email}`);
             res.redirect('/login?success=Account%20created');
@@ -284,7 +288,7 @@ app.post('/update-bio', ids.idsMiddleware, csrfProtection, (req, res) => {
 
     safeQuery('UPDATE users SET bio = ? WHERE id = ?', [bioCheck.sanitized, user.id], (err) => {
         if (err) {
-            logger.warn("Bio update failed", { error: err.message });
+            logger.warn("Bio update failed", { message: err.message });
             return res.redirect('/profile?error=Update%20failed');
         }
 
@@ -309,7 +313,7 @@ app.post('/change-password', ids.idsMiddleware, csrfProtection, async (req, res)
     const hashed = await bcrypt.hash(newPassword + PEPPER, SALT_ROUNDS);
     safeQuery('UPDATE users SET password = ? WHERE id = ?', [hashed, user.id], (err) => {
         if (err) {
-            logger.warn("Password change failed", { error: err.message });
+            logger.warn("Password change failed", { message: err.message });
             return res.redirect('/profile?error=Password%20change%20failed');
         }
         res.redirect('/profile?success=Password%20changed');
@@ -349,6 +353,13 @@ app.post('/api/update-bio', requireAuthApi, (req, res) => {
         const newToken = jwt.sign({ user: updatedUser }, JWT_SECRET, { expiresIn: '2h' });
         res.json({ success: true, user: updatedUser, token: newToken });
     });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+    logger.error("Unhandled error", { error: err.message, stack: err.stack });
+    if (res.headersSent) return next(err);
+    res.redirect('/?error=Service%20temporarily%20unavailable');
 });
 
 // Start server
