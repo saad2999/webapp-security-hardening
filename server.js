@@ -108,7 +108,7 @@ const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHe
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 app.use(globalLimiter);
 
-// Health check – shows DB status
+// Health check – accurate DB status
 app.get('/health', (req, res) => {
     const dbStatus = (db && db.state === 'authenticated') ? 'connected' : 'disconnected';
     res.json({ status: 'ok', time: Date.now(), database: dbStatus });
@@ -158,7 +158,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Database Connection – NON-FATAL for Cloud Run
+// Database Connection – NON-FATAL
 const db = mysql.createConnection({
     host: process.env.DB_HOST || '127.0.0.1',
     user: process.env.DB_USER || 'root',
@@ -168,28 +168,32 @@ const db = mysql.createConnection({
 
 db.connect(err => {
     if (err) {
-        logger.warn("Initial DB connection failed – retrying on queries (normal during Cloud Run startup)", { 
-            error: err.message || err 
-        });
-        // NEVER exit – Cloud Run sidecar proxy may not be ready yet
+        logger.warn("Initial DB connection failed – will retry on queries", { error: err.message });
     } else {
         logger.info("DB Connected Successfully on startup");
     }
 });
 
-// Safe query wrapper with retry logic for transient startup issues
-const safeQuery = (sql, params, callback, retries = 3) => {
-    db.query(sql, params, (err, results) => {
-        if (err && retries > 0 && ['ECONNRESET', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST'].includes(err.code)) {
-            logger.warn(`Transient DB error – retrying ${retries} more times`, { code: err.code });
-            setTimeout(() => safeQuery(sql, params, callback, retries - 1), 1000);
-            return;
-        }
-        if (err) {
-            logger.error("DB query failed", { sql: sql.substring(0, 100), error: err.message });
-        }
-        callback(err, results || []);
-    });
+// Safe query wrapper – fully protected with retry and try/catch
+const safeQuery = (sql, params = [], callback) => {
+    if (!db || !db.query) {
+        logger.warn("DB not initialized");
+        return callback(new Error("DB not ready"), null);
+    }
+
+    try {
+        db.query(sql, params, (err, results) => {
+            if (err && ['ECONNRESET', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST'].includes(err.code)) {
+                logger.warn("Transient DB error – retrying once");
+                setTimeout(() => db.query(sql, params, callback), 1000);
+                return;
+            }
+            callback(err, results || []);
+        });
+    } catch (e) {
+        logger.error("Synchronous DB error", { error: e.message });
+        callback(e, null);
+    }
 };
 
 // Routes
@@ -209,36 +213,31 @@ app.get('/logout', (req, res) => {
 });
 
 // Login
-app.post('/login', loginLimiter, async (req, res) => {
-    try {
-        const { email = '', password = '' } = req.body;
-        if (!validatorLib.isEmail(String(email)) || !password) {
+app.post('/login', loginLimiter, (req, res) => {
+    const { email = '', password = '' } = req.body;
+    if (!validatorLib.isEmail(String(email)) || !password) {
+        return res.redirect('/login?error=Invalid%20login');
+    }
+
+    safeQuery('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
+        if (err || results.length === 0) {
+            logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip}`);
             return res.redirect('/login?error=Invalid%20login');
         }
+        const user = results[0];
+        const ok = await bcrypt.compare(password + PEPPER, user.password);
+        if (!ok) {
+            logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=wrong_password`);
+            return res.redirect('/login?error=Invalid%20login');
+        }
+        logger.info(`SUCCESSFUL_LOGIN email=${email} ip=${req.ip}`);
 
-        safeQuery('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
-            if (err || results.length === 0) {
-                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=no_user_or_db_error`);
-                return res.redirect('/login?error=Invalid%20login');
-            }
-            const user = results[0];
-            const ok = await bcrypt.compare(password + PEPPER, user.password);
-            if (!ok) {
-                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=wrong_password`);
-                return res.redirect('/login?error=Invalid%20login');
-            }
-            logger.info(`SUCCESSFUL_LOGIN email=${email} ip=${req.ip}`);
-
-            const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
-            const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
-            res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
-            req.session.user = payloadUser;
-            res.redirect('/profile');
-        });
-    } catch (e) {
-        logger.error("Login exception", { error: e.message });
-        res.redirect('/login?error=Server%20error');
-    }
+        const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
+        const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
+        res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
+        req.session.user = payloadUser;
+        res.redirect('/profile');
+    });
 });
 
 // Signup
@@ -256,13 +255,13 @@ app.post('/signup', ids.idsMiddleware, csrfProtection, async (req, res) => {
 
         const hashed = await bcrypt.hash(password + PEPPER, SALT_ROUNDS);
 
-        safeQuery('INSERT INTO users (email, password, name, bio) VALUES (?, ?, ?, ?)', [email, hashed, name, bio], (err, result) => {
+        safeQuery('INSERT INTO users (email, password, name, bio) VALUES (?, ?, ?, ?)', [email, hashed, name, bio], (err) => {
             if (err) {
                 if (err.code === 'ER_DUP_ENTRY') {
                     return res.redirect('/signup?error=Email%20exists');
                 }
-                logger.error("Signup failed", { error: err.message });
-                return res.redirect('/signup?error=Service%20temporarily%20unavailable');
+                logger.error("Signup DB error", { error: err.message });
+                return res.redirect('/signup?error=Registration%20failed%20(try%20again)');
             }
             logger.info(`New user registered: ${email}`);
             res.redirect('/login?success=Account%20created');
@@ -349,6 +348,13 @@ app.post('/api/update-bio', requireAuthApi, (req, res) => {
         const newToken = jwt.sign({ user: updatedUser }, JWT_SECRET, { expiresIn: '2h' });
         res.json({ success: true, user: updatedUser, token: newToken });
     });
+});
+
+// Global error handler – prevents Cloud Run 503 crashes
+app.use((err, req, res, next) => {
+    logger.error("Unhandled error", { error: err.message, stack: err.stack });
+    if (res.headersSent) return next(err);
+    res.redirect('/?error=Service%20temporarily%20unavailable');
 });
 
 // Start server
