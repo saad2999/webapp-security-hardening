@@ -1,4 +1,4 @@
-require('dotenv').config();  
+require('dotenv').config();
 const express = require('express');
 
 const session = require('express-session');
@@ -17,7 +17,7 @@ const validator = require('./validator');
 const validatorLib = require('validator');
 const ids = require('./ids');
 const cors = require('cors');
-const csrf = require('@dr.pogodin/csurf');  
+const csrf = require('@dr.pogodin/csurf');
 // Maintained fork – fixes vulnerabilities
 
 const app = express();
@@ -186,7 +186,7 @@ app.get('/profile', (req, res) => {
 
 app.get('/logout', (req, res) => {
     res.clearCookie('token');
-    req.session.destroy(() => {});
+    req.session.destroy(() => { });
     res.redirect('/');
 });
 
@@ -319,7 +319,7 @@ app.post('/api/update-bio', requireAuthApi, (req, res) => {
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-    logger.info('CLEARWAY CYBER - WEEK 5 COMPLETE: SQLi & CSRF PROTECTED');
+    logger.info('CLEARWAY CYBER - WEEK 5 COMPLETE: SQLi & CSRF PROTECTED....');
     logger.info(`Server running at http://localhost:${PORT}`);
     logger.info('CSRF tokens required on all state-changing requests');
     logger.info('Ready for Burp Suite testing and ethical hacking report');
