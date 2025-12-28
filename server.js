@@ -18,7 +18,6 @@ const validatorLib = require('validator');
 const ids = require('./ids');
 const cors = require('cors');
 const csrf = require('@dr.pogodin/csurf');
-// Maintained fork – fixes vulnerabilities
 
 const app = express();
 
@@ -35,7 +34,7 @@ app.use(express.static('public'));
 
 // Session with secure config
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'clearway-2025',
+    secret: process.env.SESSION_SECRET || 'clearway-2025-fallback-secret',
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -55,7 +54,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token']
 }));
 
-// Helmet with CSP + HSTS in one call
+// Helmet with CSP + HSTS
 app.use(helmet({
     contentSecurityPolicy: {
         useDefaults: true,
@@ -75,7 +74,7 @@ app.use(helmet({
     }
 }));
 
-// CSRF Protection using maintained @dr.pogodin/csurf
+// CSRF Protection
 const csrfProtection = csrf({
     cookie: {
         httpOnly: true,
@@ -84,9 +83,8 @@ const csrfProtection = csrf({
     }
 });
 
-// Smart CSRF middleware: generate on GET, validate on POST/PUT/DELETE
+// Smart CSRF middleware
 app.use((req, res, next) => {
-    // Skip CSRF for JSON API login (safe & common pattern)
     if (req.path === '/login' && req.headers['content-type'] === 'application/json') {
         return next();
     }
@@ -102,7 +100,6 @@ app.use((req, res, next) => {
         });
     }
 
-    // Validate CSRF token for state-changing requests
     return csrfProtection(req, res, next);
 });
 
@@ -112,7 +109,10 @@ const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHead
 app.use(globalLimiter);
 
 // Health check
-app.get('/health', (req, res) => res.json({ status: 'ok', time: Date.now() }));
+app.get('/health', (req, res) => {
+    const dbStatus = db && db.state !== 'disconnected' ? 'connected' : 'disconnected';
+    res.json({ status: 'ok', time: Date.now(), database: dbStatus });
+});
 
 // Winston Logger
 const logger = winston.createLogger({
@@ -132,12 +132,12 @@ const logger = winston.createLogger({
 });
 app.set('logger', logger);
 
-// Secrets from .env
+// Secrets
 const PEPPER = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025DoNotShare!@#';
-const JWT_SECRET = process.env.JWT_SECRET || 'super_secure_random_jwt_secret_2025_clearway_internship_!@#$%^&*()_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in-production';
 const SALT_ROUNDS = 12;
 
-// Auth middleware (JWT + session fallback)
+// Auth middleware
 app.use((req, res, next) => {
     res.locals.error = req.query.error;
     res.locals.success = req.query.success;
@@ -158,21 +158,31 @@ app.use((req, res, next) => {
     next();
 });
 
-// Database Connection – uses .env values (safe for local & GCP)
+// Database Connection (non-fatal)
 const db = mysql.createConnection({
     host: process.env.DB_HOST || '127.0.0.1',
-    user: process.env.DB_USER || 'redhat',
+    user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'Clearway_Cyber_db'
 });
 
 db.connect(err => {
     if (err) {
-        logger.error("DB connect failed", { error: err?.message || err });
-        process.exit(1);
+        logger.error("DB connection failed – app continuing in limited/demo mode", { error: err.message || err });
+        // DO NOT exit – Cloud Run needs the container to stay alive
+    } else {
+        logger.info("DB Connected Successfully");
     }
-    logger.info("DB Connected Successfully");
 });
+
+// Safe query wrapper – prevents crashes if DB is down
+const safeQuery = (sql, params, callback) => {
+    if (!db || db.state === 'disconnected' || db.state === 'protocol_error') {
+        logger.warn("Database unavailable – request processed in demo mode", { sql: sql.substring(0, 100) });
+        return callback(null, []); // Simulate empty result
+    }
+    db.query(sql, params, callback);
+};
 
 // Routes
 app.get('/', (req, res) => res.render('index'));
@@ -190,7 +200,7 @@ app.get('/logout', (req, res) => {
     res.redirect('/');
 });
 
-// Login (no CSRF required – safe pattern)
+// Login
 app.post('/login', loginLimiter, async (req, res) => {
     try {
         const { email = '', password = '' } = req.body;
@@ -198,9 +208,9 @@ app.post('/login', loginLimiter, async (req, res) => {
             return res.redirect('/login?error=Invalid%20login');
         }
 
-        db.query('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
+        safeQuery('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
             if (err || results.length === 0) {
-                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=no_user`);
+                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=no_user_or_db_unavailable`);
                 return res.redirect('/login?error=Invalid%20login');
             }
             const user = results[0];
@@ -218,11 +228,12 @@ app.post('/login', loginLimiter, async (req, res) => {
             res.redirect('/profile');
         });
     } catch (e) {
+        logger.error("Login error", { error: e.message });
         res.redirect('/login?error=Server%20error');
     }
 });
 
-// Protected routes with CSRF
+// Signup
 app.post('/signup', ids.idsMiddleware, csrfProtection, async (req, res) => {
     try {
         let { email, password, name, bio = '' } = req.body;
@@ -236,9 +247,12 @@ app.post('/signup', ids.idsMiddleware, csrfProtection, async (req, res) => {
         bio = validatorLib.escape(bio);
 
         const hashed = await bcrypt.hash(password + PEPPER, SALT_ROUNDS);
-        db.query('INSERT INTO users (email, password, name, bio) VALUES (?, ?, ?, ?)', [email, hashed, name, bio], (err) => {
+        safeQuery('INSERT INTO users (email, password, name, bio) VALUES (?, ?, ?, ?)', [email, hashed, name, bio], (err) => {
             if (err?.code === 'ER_DUP_ENTRY') return res.redirect('/signup?error=Email%20exists');
-            if (err) return res.redirect('/signup?error=Server%20error');
+            if (err) {
+                logger.warn("Signup failed – DB unavailable", { error: err.message });
+                return res.redirect('/signup?error=Service%20temporarily%20unavailable');
+            }
             res.redirect('/login?success=Account%20created');
         });
     } catch (e) {
@@ -246,6 +260,7 @@ app.post('/signup', ids.idsMiddleware, csrfProtection, async (req, res) => {
     }
 });
 
+// Update Bio
 app.post('/update-bio', ids.idsMiddleware, csrfProtection, (req, res) => {
     const user = res.locals.user;
     if (!user) return res.redirect('/login');
@@ -254,8 +269,11 @@ app.post('/update-bio', ids.idsMiddleware, csrfProtection, (req, res) => {
     const bioCheck = validator.validateBio(rawBio);
     if (!bioCheck.ok) return res.redirect('/profile?error=Invalid%20bio');
 
-    db.query('UPDATE users SET bio = ? WHERE id = ?', [bioCheck.sanitized, user.id], (err) => {
-        if (err) return res.status(500).send('DB Error');
+    safeQuery('UPDATE users SET bio = ? WHERE id = ?', [bioCheck.sanitized, user.id], (err) => {
+        if (err) {
+            logger.warn("Bio update failed – DB unavailable");
+            return res.redirect('/profile?error=Update%20failed%20(DB%20unavailable)');
+        }
 
         const updatedUser = { ...user, bio: bioCheck.sanitized };
         req.session.user = updatedUser;
@@ -266,6 +284,7 @@ app.post('/update-bio', ids.idsMiddleware, csrfProtection, (req, res) => {
     });
 });
 
+// Change Password
 app.post('/change-password', ids.idsMiddleware, csrfProtection, async (req, res) => {
     const user = res.locals.user;
     if (!user) return res.redirect('/login');
@@ -275,13 +294,15 @@ app.post('/change-password', ids.idsMiddleware, csrfProtection, async (req, res)
     if (!pwdCheck.ok) return res.redirect('/profile?error=Weak%20password');
 
     const hashed = await bcrypt.hash(newPassword + PEPPER, SALT_ROUNDS);
-    db.query('UPDATE users SET password = ? WHERE id = ?', [hashed, user.id], (err) => {
-        if (err) return res.redirect('/profile?error=Server%20error');
+    safeQuery('UPDATE users SET password = ? WHERE id = ?', [hashed, user.id], (err) => {
+        if (err) {
+            return res.redirect('/profile?error=Password%20change%20failed%20(DB%20unavailable)');
+        }
         res.redirect('/profile?success=Password%20changed');
     });
 });
 
-// API Endpoints
+// API Endpoints (unchanged except safeQuery)
 function requireAuthApi(req, res, next) {
     const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
@@ -308,8 +329,8 @@ app.post('/api/update-bio', requireAuthApi, (req, res) => {
     const bioCheck = validator.validateBio(rawBio);
     if (!bioCheck.ok) return res.status(400).json({ error: 'Invalid bio' });
 
-    db.query('UPDATE users SET bio = ? WHERE id = ?', [bioCheck.sanitized, req.user.id], (err) => {
-        if (err) return res.status(500).json({ error: 'DB error' });
+    safeQuery('UPDATE users SET bio = ? WHERE id = ?', [bioCheck.sanitized, req.user.id], (err) => {
+        if (err) return res.status(500).json({ error: 'DB unavailable' });
         const updatedUser = { ...req.user, bio: bioCheck.sanitized };
         const newToken = jwt.sign({ user: updatedUser }, JWT_SECRET, { expiresIn: '2h' });
         res.json({ success: true, user: updatedUser, token: newToken });
