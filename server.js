@@ -319,8 +319,8 @@ app.post('/api/update-bio', requireAuthApi, (req, res) => {
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-    logger.info('CLEARWAY CYBER - WEEK 5 COMPLETE: SQLi & CSRF PROTECTED....');
+    logger.info('CLEARWAY CYBER - WEEK 5 COMPLETE: SQLi & CSRF PROTECTED......');
     logger.info(`Server running at http://localhost:${PORT}`);
-    logger.info('CSRF tokens required on all state-changing requests');
-    logger.info('Ready for Burp Suite testing and ethical hacking report');
+    logger.info('CSRF tokens required on all state-changing requests.');
+    logger.info('Ready for Burp Suite testing and ethical hacking report.');
 });
