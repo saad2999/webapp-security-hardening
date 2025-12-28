@@ -19,7 +19,7 @@ services:
       NODE_ENV: development
       DB_HOST: db
       DB_USER: root
-      DB_PASSWORD: rootpass
+      DB_PASSWORD: 
       DB_NAME: Clearway_Cyber_db
       PEPPER: 'change-me'
       JWT_SECRET: 'change-me'

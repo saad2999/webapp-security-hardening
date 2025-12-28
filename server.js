@@ -317,7 +317,7 @@ app.post('/api/update-bio', requireAuthApi, (req, res) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
     logger.info('CLEARWAY CYBER - WEEK 5 COMPLETE: SQLi & CSRF PROTECTED');
     logger.info(`Server running at http://localhost:${PORT}`);
