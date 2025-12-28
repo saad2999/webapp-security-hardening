@@ -26,3 +26,5 @@ images:
   - 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA'
 
 timeout: 1200s
+options:
+  logging: CLOUD_LOGGING_ONLY
