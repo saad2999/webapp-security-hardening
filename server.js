@@ -94,7 +94,7 @@ app.use(helmet({
 // CSRF Protection
 const csrfProtection = csrf({
     cookie: {
-        httpOnly: true,
+        httpOnly: false,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax'
     }
