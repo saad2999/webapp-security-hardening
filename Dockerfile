@@ -1,24 +1,29 @@
 FROM node:18-alpine
 
-# Create app directory
+# Set environment to production
+ENV NODE_ENV=production
+
+# Create app directory and set permissions
 WORKDIR /usr/src/app
 
-# Install dependencies first (caching optimization)
+# Copy manifests first
 COPY package*.json ./
+
+# Install production dependencies
 RUN npm ci --only=production
 
 # Copy application source
 COPY . .
 
-# Expose the port your app runs on (for documentation)
+# Ensure the 'node' user owns the files
+RUN chown -R node:node /usr/src/app
+
+# Cloud Run uses the PORT env var (usually 8080)
 EXPOSE 8080
 
-# Health check to verify app is running
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:${PORT:-8080}/health', (r) => {if(r.statusCode!==200)throw new Error()})"
-
-# Run the application
-CMD ["node", "server.js"]
-
-# Add startup script to ensure the app uses PORT env variable
+# Switch to non-root user for security
 USER node
+
+# Start the application
+# We use 'node server.js' directly to ensure signals (SIGTERM) are handled correctly
+CMD ["node", "server.js"]
