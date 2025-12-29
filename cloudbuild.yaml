@@ -2,12 +2,12 @@ steps:
   # Step 1: Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA', '.']
-
-  # Step 2: Push the image to Artifact Registry (gcr.io)
+  
+  # Step 2: Push the image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA']
 
-  # Step 3: Deploy to Cloud Run with explicit runtime service account
+  # Step 3: Deploy to Cloud Run with extended timeouts
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
@@ -18,8 +18,14 @@ steps:
           --region ${_REGION:-us-central1} \
           --platform managed \
           --allow-unauthenticated \
-          --service-account webapp-deployer@project-dd3fa7a3-d0dc-4556-8d3.iam.gserviceaccount.com \
+          --service-account webapp-deployer@project-dd3fa3a3-d0dc-4556-8d3.iam.gserviceaccount.com \
           --set-env-vars "NODE_ENV=production" \
+          --timeout=300s \
+          --startup-timeout=180s \
+          --cpu=1 \
+          --memory=512Mi \
+          --min-instances=0 \
+          --max-instances=3 \
           ${_CLOUDSQL_INSTANCE:+--add-cloudsql-instances=${_CLOUDSQL_INSTANCE}}
 
 substitutions:
@@ -33,3 +39,4 @@ timeout: 1200s
 
 options:
   logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'

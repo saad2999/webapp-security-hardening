@@ -1,12 +1,17 @@
-.git
 node_modules
-npm - debug.log
-    .env
-coverage
-logs
-    *.log
-monitoring/*.local
-monitoring/*.conf
-/.vscode
-Dockerfile
+npm-debug.log
+.env
+.env.local
+.git
+.gitignore
 README.md
+*.md
+.vscode
+.idea
+.DS_Store
+coverage
+test
+tests
+*.log
+*.pid
+*.seed
