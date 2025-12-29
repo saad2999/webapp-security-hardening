@@ -26,6 +26,7 @@ app.use(expressLayout);
 app.set('layout', 'layout');
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+app.set('trust proxy', 1);  // Trusts GCP proxy for correct IPs
 
 app.use(morgan('dev'));
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -122,7 +123,7 @@ app.use((req, res, next) => {
             const payload = jwt.verify(token, JWT_SECRET);
             res.locals.user = payload.user;
             req.user = payload.user;
-        } catch (e) { 
+        } catch (e) {
             logger.debug('JWT verification failed', { error: e.message });
         }
     } else if (req.session?.user) {
@@ -167,7 +168,7 @@ function createDatabaseConnection() {
     db.on('error', (err) => {
         logger.error('Database connection error:', { error: err.message, code: err.code });
         dbConnected = false;
-        
+
         // Attempt to reconnect
         if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
             logger.info('Attempting to reconnect to database...');
@@ -177,11 +178,11 @@ function createDatabaseConnection() {
 
     db.connect(err => {
         if (err) {
-            logger.error("❌ Database connection failed:", { 
-                error: err.message, 
+            logger.error("❌ Database connection failed:", {
+                error: err.message,
                 code: err.code,
                 socketPath: dbConfig.socketPath,
-                host: dbConfig.host 
+                host: dbConfig.host
             });
             dbConnected = false;
         } else {
@@ -196,9 +197,9 @@ createDatabaseConnection();
 // Health check – accurate DB status
 app.get('/health', (req, res) => {
     const dbStatus = dbConnected && db && db.state === 'authenticated' ? 'connected' : 'disconnected';
-    res.json({ 
-        status: 'ok', 
-        time: Date.now(), 
+    res.json({
+        status: 'ok',
+        time: Date.now(),
         database: dbStatus,
         environment: process.env.NODE_ENV || 'development',
         socketPath: dbConfig.socketPath || 'N/A',
@@ -220,12 +221,12 @@ const safeQuery = (sql, params = [], callback) => {
     try {
         db.query(sql, params, (err, results) => {
             if (err) {
-                logger.error("Query error:", { 
-                    error: err.message, 
-                    code: err.code, 
+                logger.error("Query error:", {
+                    error: err.message,
+                    code: err.code,
                     sql: sql.substring(0, 100)
                 });
-                
+
                 if (['ECONNRESET', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST'].includes(err.code)) {
                     logger.warn("Transient DB error – retrying once");
                     dbConnected = false;
@@ -255,27 +256,27 @@ app.get('/profile', csrfProtection, (req, res) => {
         logger.warn('Profile access without authentication');
         return res.redirect('/login');
     }
-    
-    logger.info('Profile page loaded', { 
+
+    logger.info('Profile page loaded', {
         userId: res.locals.user.id,
-        hasCsrfToken: !!res.locals.csrfToken 
+        hasCsrfToken: !!res.locals.csrfToken
     });
-    
+
     res.render('profile');
 });
 
 app.get('/logout', (req, res) => {
     res.clearCookie('token');
-    req.session.destroy(() => {});
+    req.session.destroy(() => { });
     res.redirect('/');
 });
 
 // Login (NO CSRF for login)
 app.post('/login', loginLimiter, (req, res) => {
     const { email = '', password = '' } = req.body;
-    
+
     logger.info(`Login attempt for: ${email}`);
-    
+
     if (!validatorLib.isEmail(String(email)) || !password) {
         logger.warn(`Invalid login format: ${email}`);
         return res.redirect('/login?error=Invalid%20login');
@@ -286,12 +287,12 @@ app.post('/login', loginLimiter, (req, res) => {
             logger.error(`Database error during login for ${email}:`, { error: err.message });
             return res.redirect('/login?error=Service%20unavailable');
         }
-        
+
         if (results.length === 0) {
             logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip}`);
             return res.redirect('/login?error=Invalid%20login');
         }
-        
+
         const user = results[0];
         const ok = await bcrypt.compare(password + PEPPER, user.password);
         if (!ok) {
@@ -302,11 +303,11 @@ app.post('/login', loginLimiter, (req, res) => {
 
         const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
         const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
-        res.cookie('token', token, { 
-            httpOnly: true, 
-            sameSite: 'lax', 
+        res.cookie('token', token, {
+            httpOnly: true,
+            sameSite: 'lax',
             secure: process.env.NODE_ENV === 'production',
-            maxAge: 2 * 60 * 60 * 1000 
+            maxAge: 2 * 60 * 60 * 1000
         });
         req.session.user = payloadUser;
         res.redirect('/profile');
@@ -317,14 +318,14 @@ app.post('/login', loginLimiter, (req, res) => {
 app.post('/signup', csrfProtection, ids.idsMiddleware, async (req, res) => {
     try {
         let { email, password, name, bio = '' } = req.body;
-        
+
         logger.info(`Signup attempt: ${email}`);
-        
+
         if (!email || !password) {
             logger.warn('Signup missing fields');
             return res.redirect('/signup?error=Missing%20fields');
         }
-        
+
         if (!validatorLib.isEmail(email)) {
             logger.warn(`Invalid email format: ${email}`);
             return res.redirect('/signup?error=Invalid%20email');
@@ -362,62 +363,62 @@ app.post('/signup', csrfProtection, ids.idsMiddleware, async (req, res) => {
 // Update Bio (WITH CSRF and IDS)
 app.post('/update-bio', csrfProtection, ids.idsMiddleware, (req, res) => {
     const user = res.locals.user;
-    
-    logger.info(`Bio update attempt`, { 
-        userId: user?.id, 
+
+    logger.info(`Bio update attempt`, {
+        userId: user?.id,
         email: user?.email,
         hasCsrfInBody: !!req.body._csrf,
         csrfValue: req.body._csrf?.substring(0, 10) + '...'
     });
-    
+
     if (!user) {
         logger.warn('Bio update attempted without authentication');
         return res.redirect('/login');
     }
 
     const rawBio = req.body.bio || '';
-    
-    logger.info(`Bio content`, { 
-        rawBio: rawBio.substring(0, 50), 
-        length: rawBio.length 
+
+    logger.info(`Bio content`, {
+        rawBio: rawBio.substring(0, 50),
+        length: rawBio.length
     });
-    
+
     const bioCheck = validator.validateBio(rawBio);
     if (!bioCheck.ok) {
         logger.warn('Invalid bio content', { reason: bioCheck.error });
         return res.redirect('/profile?error=Invalid%20bio');
     }
 
-    logger.info(`Executing bio update query`, { 
-        userId: user.id, 
-        bioLength: bioCheck.sanitized.length 
+    logger.info(`Executing bio update query`, {
+        userId: user.id,
+        bioLength: bioCheck.sanitized.length
     });
 
     safeQuery('UPDATE users SET bio = ? WHERE id = ?', [bioCheck.sanitized, user.id], (err, results) => {
         if (err) {
-            logger.error("Bio update DB failed", { 
-                error: err.message, 
+            logger.error("Bio update DB failed", {
+                error: err.message,
                 code: err.code,
-                userId: user.id 
+                userId: user.id
             });
             return res.redirect('/profile?error=Update%20failed');
         }
 
-        logger.info(`Bio updated successfully`, { 
-            userId: user.id, 
-            affectedRows: results?.affectedRows 
+        logger.info(`Bio updated successfully`, {
+            userId: user.id,
+            affectedRows: results?.affectedRows
         });
 
         const updatedUser = { ...user, bio: bioCheck.sanitized };
         req.session.user = updatedUser;
-        
+
         try {
             const token = jwt.sign({ user: updatedUser }, JWT_SECRET, { expiresIn: '2h' });
-            res.cookie('token', token, { 
-                httpOnly: true, 
-                sameSite: 'lax', 
+            res.cookie('token', token, {
+                httpOnly: true,
+                sameSite: 'lax',
                 secure: process.env.NODE_ENV === 'production',
-                maxAge: 2 * 60 * 60 * 1000 
+                maxAge: 2 * 60 * 60 * 1000
             });
         } catch (e) {
             logger.error('JWT signing failed', { error: e.message });
@@ -430,24 +431,24 @@ app.post('/update-bio', csrfProtection, ids.idsMiddleware, (req, res) => {
 // Change Password (WITH CSRF and IDS)
 app.post('/change-password', csrfProtection, ids.idsMiddleware, async (req, res) => {
     const user = res.locals.user;
-    
-    logger.info(`Password change attempt`, { 
+
+    logger.info(`Password change attempt`, {
         userId: user?.id,
-        hasCsrfInBody: !!req.body._csrf 
+        hasCsrfInBody: !!req.body._csrf
     });
-    
+
     if (!user) {
         logger.warn('Password change attempted without authentication');
         return res.redirect('/login');
     }
 
     const newPassword = req.body.newPassword;
-    
+
     if (!newPassword) {
         logger.warn('Password change without password');
         return res.redirect('/profile?error=Password%20required');
     }
-    
+
     const pwdCheck = validator.validatePassword(newPassword);
     if (!pwdCheck.ok) {
         logger.warn('Weak password in change attempt');
@@ -456,21 +457,21 @@ app.post('/change-password', csrfProtection, ids.idsMiddleware, async (req, res)
 
     try {
         const hashed = await bcrypt.hash(newPassword + PEPPER, SALT_ROUNDS);
-        
+
         logger.info(`Executing password change query`, { userId: user.id });
-        
+
         safeQuery('UPDATE users SET password = ? WHERE id = ?', [hashed, user.id], (err, results) => {
             if (err) {
-                logger.error("Password change DB failed", { 
-                    error: err.message, 
+                logger.error("Password change DB failed", {
+                    error: err.message,
                     code: err.code,
-                    userId: user.id 
+                    userId: user.id
                 });
                 return res.redirect('/profile?error=Password%20change%20failed');
             }
-            logger.info(`Password changed successfully`, { 
+            logger.info(`Password changed successfully`, {
                 userId: user.id,
-                affectedRows: results?.affectedRows 
+                affectedRows: results?.affectedRows
             });
             res.redirect('/profile?success=Password%20changed');
         });
@@ -529,7 +530,7 @@ app.post('/api/update-bio', requireAuthApi, csrfProtection, (req, res) => {
             logger.error('API bio update failed', { error: err.message });
             return res.status(500).json({ error: 'Update failed' });
         }
-        
+
         const updatedUser = { ...req.user, bio: bioCheck.sanitized };
         const newToken = jwt.sign({ user: updatedUser }, JWT_SECRET, { expiresIn: '2h' });
         res.json({ success: true, user: updatedUser, token: newToken });
@@ -538,16 +539,16 @@ app.post('/api/update-bio', requireAuthApi, csrfProtection, (req, res) => {
 
 // Global error handler – prevents Cloud Run 503 crashes
 app.use((err, req, res, next) => {
-    logger.error("Unhandled error", { 
-        error: err.message, 
+    logger.error("Unhandled error", {
+        error: err.message,
         stack: err.stack,
         path: req.path,
         method: req.method,
-        code: err.code 
+        code: err.code
     });
-    
+
     if (res.headersSent) return next(err);
-    
+
     // CSRF errors
     if (err.code === 'EBADCSRFTOKEN') {
         logger.error('CSRF token validation failed', { path: req.path });
@@ -556,12 +557,12 @@ app.use((err, req, res, next) => {
         }
         return res.redirect('/profile?error=Security%20token%20expired');
     }
-    
+
     // Don't redirect for API endpoints
     if (req.path.startsWith('/api/')) {
         return res.status(500).json({ error: 'Internal server error' });
     }
-    
+
     res.redirect('/?error=Service%20temporarily%20unavailable');
 });
 
