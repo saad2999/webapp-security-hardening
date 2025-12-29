@@ -589,7 +589,7 @@ app.listen(PORT, '0.0.0.0', async () => {
     logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     logger.info(`🔌 Cloud Run: ${!!process.env.K_SERVICE}`);
     logger.info(`🔧 Trust proxy: ${app.get('trust proxy')}`);
-    logger.info('✅ Ready for testing');
+    logger.info('✅ Ready for testing.');
     logger.info('═══════════════════════════════════════════════════════════');
     
     // Test database connection on startup
