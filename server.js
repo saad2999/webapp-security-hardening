@@ -22,7 +22,7 @@ const csrf = require('@dr.pogodin/csurf');
 const app = express();
 
 // Trust proxy - MUST be FIRST before any rate limiters
-app.set('trust proxy', true); // Changed to true for Cloud Run
+app.set('trust proxy', 1); // Changed to 1 for single proxy (Cloud Run)
 
 // Winston Logger
 const logger = winston.createLogger({
@@ -108,23 +108,16 @@ const PEPPER = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025DoNotShare!
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in-production';
 const SALT_ROUNDS = 12;
 
-// Rate limiting - PROPERLY CONFIGURED FOR CLOUD RUN with proxy support
+// Rate limiting - SIMPLIFIED CONFIGURATION
+// Use the default keyGenerator which properly handles IPv6 and proxy headers
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 200,
     standardHeaders: true,
     legacyHeaders: false,
-    trustProxy: true, // Trust the proxy to get real client IP
-    keyGenerator: function(req) {
-        // Use the first IP from X-Forwarded-For if present
-        const xForwardedFor = req.headers['x-forwarded-for'];
-        if (xForwardedFor) {
-            const ips = xForwardedFor.split(',').map(ip => ip.trim());
-            return ips[0]; // The original client IP
-        }
-        // Fallback to req.ip or remote address
-        return req.ip || req.socket.remoteAddress;
-    }
+    // Remove custom keyGenerator and trustProxy settings
+    // The default keyGenerator will use req.ip which is set by Express trust proxy
+    skip: (req, res) => req.path === '/health' // Skip health checks
 });
 
 const loginLimiter = rateLimit({
@@ -132,16 +125,13 @@ const loginLimiter = rateLimit({
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
-    trustProxy: true, // Trust the proxy to get real client IP
-    keyGenerator: function(req) {
-        // Use the first IP from X-Forwarded-For if present
-        const xForwardedFor = req.headers['x-forwarded-for'];
-        if (xForwardedFor) {
-            const ips = xForwardedFor.split(',').map(ip => ip.trim());
-            return ips[0]; // The original client IP
-        }
-        // Fallback to req.ip or remote address
-        return req.ip || req.socket.remoteAddress;
+    // Remove custom keyGenerator and trustProxy settings
+    // The default keyGenerator will use req.ip which is set by Express trust proxy
+    keyGenerator: (req, res) => {
+        // Use the standard keyGenerator but with email for login attempts
+        const email = req.body.email || 'unknown';
+        const ip = req.ip || req.socket.remoteAddress;
+        return `${ip}-${email}`; // Combine IP and email for login attempts
     }
 });
 
@@ -254,7 +244,8 @@ app.get('/health', (req, res) => {
         socketPath: dbConfig.socketPath || 'N/A',
         host: dbConfig.host || 'N/A',
         clientIp: req.ip,
-        xForwardedFor: req.headers['x-forwarded-for']
+        xForwardedFor: req.headers['x-forwarded-for'],
+        forwarded: req.headers['forwarded']
     });
 });
 
@@ -638,6 +629,7 @@ app.listen(PORT, () => {
     logger.info(`🗄️  Database: ${dbConfig.database}`);
     logger.info(`🔒 CSRF tokens required on all state-changing requests`);
     logger.info(`📊 Rate limiting enabled with proxy support`);
+    logger.info(`🔧 Trust proxy: ${app.get('trust proxy')}`);
     logger.info('✅ Ready for Burp Suite testing and ethical hacking report');
     logger.info('═══════════════════════════════════════════════════════════');
 });
