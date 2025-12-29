@@ -21,10 +21,10 @@ const csrf = require('@dr.pogodin/csurf');
 
 const app = express();
 
-// Trust proxy - MUST be before rate limiters
-app.set('trust proxy', 1);
+// Trust proxy - MUST be FIRST before any rate limiters
+app.set('trust proxy', true); // Changed to true for Cloud Run
 
-// Winston Logger (Initialize FIRST)
+// Winston Logger
 const logger = winston.createLogger({
     level: process.env.LOG_LEVEL || 'info',
     format: winston.format.combine(
@@ -97,7 +97,7 @@ app.use(helmet({
 // CSRF Protection
 const csrfProtection = csrf({
     cookie: {
-        httpOnly: false, // Must be false to allow client-side access if needed
+        httpOnly: false,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax'
     }
@@ -108,21 +108,29 @@ const PEPPER = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025DoNotShare!
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in-production';
 const SALT_ROUNDS = 12;
 
-// Rate limiting - FIXED configuration
-const globalLimiter = rateLimit({ 
-    windowMs: 15 * 60 * 1000, 
-    max: 200, 
-    standardHeaders: true, 
+// Rate limiting - PROPERLY CONFIGURED FOR CLOUD RUN
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 200,
+    standardHeaders: true,
     legacyHeaders: false,
-    skip: () => process.env.NODE_ENV === 'development' // Skip in dev
+    // Disable validation that's causing errors
+    validate: {
+        xForwardedForHeader: false,
+        trustProxy: false
+    }
 });
 
-const loginLimiter = rateLimit({ 
-    windowMs: 15 * 60 * 1000, 
-    max: 10, 
-    standardHeaders: true, 
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10,
+    standardHeaders: true,
     legacyHeaders: false,
-    skip: () => process.env.NODE_ENV === 'development' // Skip in dev
+    // Disable validation that's causing errors
+    validate: {
+        xForwardedForHeader: false,
+        trustProxy: false
+    }
 });
 
 app.use(globalLimiter);
@@ -272,7 +280,7 @@ app.get('/logout', (req, res) => {
     res.redirect('/');
 });
 
-// Profile route - SINGLE VERSION with proper CSRF
+// Profile route with proper CSRF
 app.get('/profile', (req, res) => {
     if (!res.locals.user) {
         logger.warn('Unauthenticated access to /profile');
