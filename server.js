@@ -22,8 +22,7 @@ const csrf = require('@dr.pogodin/csurf');
 const app = express();
 
 // Trust proxy - MUST be FIRST before any rate limiters
-// '1' is the standard setting for Cloud Run (trusts the first hop load balancer)
-app.set('trust proxy', 1);
+app.set('trust proxy', true); // Changed to true for Cloud Run
 
 // Winston Logger
 const logger = winston.createLogger({
@@ -109,20 +108,22 @@ const PEPPER = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025DoNotShare!
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in-production';
 const SALT_ROUNDS = 12;
 
-// Rate limiting - PROPERLY CONFIGURED FOR CLOUD RUN
+// Rate limiting - PROPERLY CONFIGURED FOR CLOUD RUN with proxy support
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 200,
     standardHeaders: true,
     legacyHeaders: false,
-    // Fix: Explicitly use req.ip resolved by Express
-    keyGenerator: (req, res) => {
-        return req.ip;
-    },
-    // Fix: Disable conflicting validations
-    validate: {
-        xForwardedForHeader: false,
-        trustProxy: false
+    trustProxy: true, // Trust the proxy to get real client IP
+    keyGenerator: function(req) {
+        // Use the first IP from X-Forwarded-For if present
+        const xForwardedFor = req.headers['x-forwarded-for'];
+        if (xForwardedFor) {
+            const ips = xForwardedFor.split(',').map(ip => ip.trim());
+            return ips[0]; // The original client IP
+        }
+        // Fallback to req.ip or remote address
+        return req.ip || req.socket.remoteAddress;
     }
 });
 
@@ -131,18 +132,33 @@ const loginLimiter = rateLimit({
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
-    // Fix: Explicitly use req.ip resolved by Express
-    keyGenerator: (req, res) => {
-        return req.ip;
-    },
-    // Fix: Disable conflicting validations
-    validate: {
-        xForwardedForHeader: false,
-        trustProxy: false
+    trustProxy: true, // Trust the proxy to get real client IP
+    keyGenerator: function(req) {
+        // Use the first IP from X-Forwarded-For if present
+        const xForwardedFor = req.headers['x-forwarded-for'];
+        if (xForwardedFor) {
+            const ips = xForwardedFor.split(',').map(ip => ip.trim());
+            return ips[0]; // The original client IP
+        }
+        // Fallback to req.ip or remote address
+        return req.ip || req.socket.remoteAddress;
     }
 });
 
 app.use(globalLimiter);
+
+// Debug middleware for IP logging
+app.use((req, res, next) => {
+    logger.debug('Request IP info', {
+        ip: req.ip,
+        originalIp: req.socket.remoteAddress,
+        xForwardedFor: req.headers['x-forwarded-for'],
+        forwarded: req.headers['forwarded'],
+        method: req.method,
+        path: req.path
+    });
+    next();
+});
 
 // Auth middleware
 app.use((req, res, next) => {
@@ -236,7 +252,9 @@ app.get('/health', (req, res) => {
         database: dbStatus,
         environment: process.env.NODE_ENV || 'development',
         socketPath: dbConfig.socketPath || 'N/A',
-        host: dbConfig.host || 'N/A'
+        host: dbConfig.host || 'N/A',
+        clientIp: req.ip,
+        xForwardedFor: req.headers['x-forwarded-for']
     });
 });
 
@@ -324,7 +342,7 @@ app.get('/profile', (req, res) => {
 app.post('/login', loginLimiter, (req, res) => {
     const { email = '', password = '' } = req.body;
 
-    logger.info(`Login attempt for: ${email}`);
+    logger.info(`Login attempt for: ${email}`, { clientIp: req.ip });
 
     if (!validatorLib.isEmail(String(email)) || !password) {
         logger.warn(`Invalid login format: ${email}`);
@@ -373,7 +391,7 @@ app.post('/signup', csrfProtection, ids.idsMiddleware, async (req, res) => {
     try {
         let { email, password, name, bio = '' } = req.body;
 
-        logger.info(`Signup attempt: ${email}`);
+        logger.info(`Signup attempt: ${email}`, { clientIp: req.ip });
 
         if (!email || !password) {
             logger.warn('Signup missing fields');
@@ -422,7 +440,8 @@ app.post('/update-bio', csrfProtection, ids.idsMiddleware, (req, res) => {
         userId: user?.id,
         email: user?.email,
         hasCsrfInBody: !!req.body._csrf,
-        csrfValue: req.body._csrf?.substring(0, 10) + '...'
+        csrfValue: req.body._csrf?.substring(0, 10) + '...',
+        clientIp: req.ip
     });
 
     if (!user) {
@@ -488,7 +507,8 @@ app.post('/change-password', csrfProtection, ids.idsMiddleware, async (req, res)
 
     logger.info(`Password change attempt`, {
         userId: user?.id,
-        hasCsrfInBody: !!req.body._csrf
+        hasCsrfInBody: !!req.body._csrf,
+        clientIp: req.ip
     });
 
     if (!user) {
@@ -583,7 +603,8 @@ app.use((err, req, res, next) => {
         stack: err.stack,
         path: req.path,
         method: req.method,
-        code: err.code
+        code: err.code,
+        clientIp: req.ip
     });
 
     if (res.headersSent) return next(err);
@@ -616,6 +637,7 @@ app.listen(PORT, () => {
     logger.info(`🔌 Connection: ${process.env.INSTANCE_CONNECTION_NAME ? 'Cloud SQL (Unix socket)' : 'Local MySQL (TCP)'}`);
     logger.info(`🗄️  Database: ${dbConfig.database}`);
     logger.info(`🔒 CSRF tokens required on all state-changing requests`);
+    logger.info(`📊 Rate limiting enabled with proxy support`);
     logger.info('✅ Ready for Burp Suite testing and ethical hacking report');
     logger.info('═══════════════════════════════════════════════════════════');
 });
