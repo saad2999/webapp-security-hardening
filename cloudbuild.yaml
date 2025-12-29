@@ -1,15 +1,40 @@
-# Deploy image to Cloud Run
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      gcloud run deploy webapp \
-        --image gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA \
-        --region ${_REGION:-us-central1} \
-        --platform managed \
-        --allow-unauthenticated \
-        --service-account webapp-deployer@project-dd3fa3a3-d0dc-4556-8d3.iam.gserviceaccount.com \
-        --set-env-vars "NODE_ENV=production" \
-        --timeout=300s \
-        ${_CLOUDSQL_INSTANCE:+--add-cloudsql-instances=${_CLOUDSQL_INSTANCE}}
+steps:
+  # Step 1: Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA', '.']
+
+  # Step 2: Push the image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA']
+
+  # Step 3: Deploy to Cloud Run (CORRECTED - startup-timeout removed)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud run deploy webapp \
+          --image gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA \
+          --region ${_REGION:-us-central1} \
+          --platform managed \
+          --allow-unauthenticated \
+          --service-account webapp-deployer@project-dd3fa3a3-d0dc-4556-8d3.iam.gserviceaccount.com \
+          --set-env-vars "NODE_ENV=production" \
+          --timeout=300s \
+          ${_CLOUDSQL_INSTANCE:+--add-cloudsql-instances=${_CLOUDSQL_INSTANCE}}
+
+# Substitutions are key-value pairs for your build
+substitutions:
+  _REGION: "us-central1"
+  _CLOUDSQL_INSTANCE: ""
+
+# Images to store in Artifact Registry
+images:
+  - 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA'
+
+# Overall build timeout
+timeout: 1200s
+
+# Logging options
+options:
+  logging: CLOUD_LOGGING_ONLY

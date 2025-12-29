@@ -2,5 +2,5 @@ runtime: nodejs18
 env_variables:
   DB_HOST: 127.0.0.1
   DB_USER: root
-  DB_PASSWORD: 
+  DB_PASSWORD: MyHome@2025!
   DB_NAME: Clearway_Cyber_db
