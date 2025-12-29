@@ -9,7 +9,6 @@ const morgan = require('morgan');
 const expressLayout = require('express-ejs-layouts');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const winston = require('winston');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -21,8 +20,8 @@ const csrf = require('@dr.pogodin/csurf');
 
 const app = express();
 
-// Trust proxy - MUST be FIRST before any rate limiters
-app.set('trust proxy', 1); // Changed to 1 for single proxy (Cloud Run)
+// Trust proxy - MUST be FIRST before any middleware
+app.set('trust proxy', 1); // Trust first proxy (Cloud Run)
 
 // Winston Logger
 const logger = winston.createLogger({
@@ -108,47 +107,78 @@ const PEPPER = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025DoNotShare!
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in-production';
 const SALT_ROUNDS = 12;
 
-// Rate limiting - SIMPLIFIED CONFIGURATION
-// Use the default keyGenerator which properly handles IPv6 and proxy headers
-const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200,
-    standardHeaders: true,
-    legacyHeaders: false,
-    // Remove custom keyGenerator and trustProxy settings
-    // The default keyGenerator will use req.ip which is set by Express trust proxy
-    skip: (req, res) => req.path === '/health' // Skip health checks
-});
-
-const loginLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    // Remove custom keyGenerator and trustProxy settings
-    // The default keyGenerator will use req.ip which is set by Express trust proxy
-    keyGenerator: (req, res) => {
-        // Use the standard keyGenerator but with email for login attempts
-        const email = req.body.email || 'unknown';
-        const ip = req.ip || req.socket.remoteAddress;
-        return `${ip}-${email}`; // Combine IP and email for login attempts
+// SIMPLE CUSTOM RATE LIMITER - Replacing express-rate-limit
+class SimpleRateLimiter {
+    constructor(windowMs, max) {
+        this.windowMs = windowMs;
+        this.max = max;
+        this.hits = new Map();
     }
-});
 
-app.use(globalLimiter);
+    middleware() {
+        return (req, res, next) => {
+            // Skip rate limiting for health endpoint
+            if (req.path === '/health') {
+                return next();
+            }
 
-// Debug middleware for IP logging
-app.use((req, res, next) => {
-    logger.debug('Request IP info', {
-        ip: req.ip,
-        originalIp: req.socket.remoteAddress,
-        xForwardedFor: req.headers['x-forwarded-for'],
-        forwarded: req.headers['forwarded'],
-        method: req.method,
-        path: req.path
-    });
-    next();
-});
+            const key = this.getKey(req);
+            const now = Date.now();
+            
+            if (!this.hits.has(key)) {
+                this.hits.set(key, []);
+            }
+            
+            const windowStart = now - this.windowMs;
+            const hitsInWindow = this.hits.get(key).filter(time => time > windowStart);
+            
+            if (hitsInWindow.length >= this.max) {
+                logger.warn(`Rate limit exceeded for ${key}`, { path: req.path, ip: req.ip });
+                return res.status(429).json({ error: 'Too many requests, please try again later.' });
+            }
+            
+            hitsInWindow.push(now);
+            this.hits.set(key, hitsInWindow);
+            
+            // Clean up old entries periodically
+            if (Math.random() < 0.01) { // 1% chance to clean up
+                this.cleanup();
+            }
+            
+            next();
+        };
+    }
+
+    getKey(req) {
+        // For login endpoint, use email + IP
+        if (req.path === '/login' && req.method === 'POST') {
+            const email = req.body.email || 'unknown';
+            return `login:${req.ip}:${email}`;
+        }
+        // For other endpoints, just use IP
+        return req.ip;
+    }
+
+    cleanup() {
+        const now = Date.now();
+        const windowStart = now - this.windowMs;
+        
+        for (const [key, hits] of this.hits.entries()) {
+            const recentHits = hits.filter(time => time > windowStart);
+            if (recentHits.length === 0) {
+                this.hits.delete(key);
+            } else {
+                this.hits.set(key, recentHits);
+            }
+        }
+    }
+}
+
+// Create rate limiters
+const globalLimiter = new SimpleRateLimiter(15 * 60 * 1000, 200); // 15 minutes, 200 requests
+const loginLimiter = new SimpleRateLimiter(15 * 60 * 1000, 10);   // 15 minutes, 10 login attempts
+
+app.use(globalLimiter.middleware());
 
 // Auth middleware
 app.use((req, res, next) => {
@@ -329,51 +359,54 @@ app.get('/profile', (req, res) => {
     });
 });
 
-// Login (NO CSRF for login)
-app.post('/login', loginLimiter, (req, res) => {
-    const { email = '', password = '' } = req.body;
+// Login with custom rate limiting
+app.post('/login', (req, res, next) => {
+    // Apply login rate limiting first
+    loginLimiter.middleware()(req, res, () => {
+        const { email = '', password = '' } = req.body;
 
-    logger.info(`Login attempt for: ${email}`, { clientIp: req.ip });
+        logger.info(`Login attempt for: ${email}`, { clientIp: req.ip });
 
-    if (!validatorLib.isEmail(String(email)) || !password) {
-        logger.warn(`Invalid login format: ${email}`);
-        return res.redirect('/login?error=Invalid%20login');
-    }
-
-    safeQuery('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
-        if (err) {
-            logger.error(`Database error during login for ${email}:`, { error: err.message });
-            return res.redirect('/login?error=Service%20unavailable');
-        }
-
-        if (results.length === 0) {
-            logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip}`);
+        if (!validatorLib.isEmail(String(email)) || !password) {
+            logger.warn(`Invalid login format: ${email}`);
             return res.redirect('/login?error=Invalid%20login');
         }
 
-        const user = results[0];
-        try {
-            const ok = await bcrypt.compare(password + PEPPER, user.password);
-            if (!ok) {
-                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=wrong_password`);
+        safeQuery('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
+            if (err) {
+                logger.error(`Database error during login for ${email}:`, { error: err.message });
+                return res.redirect('/login?error=Service%20unavailable');
+            }
+
+            if (results.length === 0) {
+                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip}`);
                 return res.redirect('/login?error=Invalid%20login');
             }
-            logger.info(`SUCCESSFUL_LOGIN email=${email} ip=${req.ip}`);
 
-            const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
-            const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
-            res.cookie('token', token, {
-                httpOnly: true,
-                sameSite: 'lax',
-                secure: process.env.NODE_ENV === 'production',
-                maxAge: 2 * 60 * 60 * 1000
-            });
-            req.session.user = payloadUser;
-            res.redirect('/profile');
-        } catch (bcryptErr) {
-            logger.error('Bcrypt error', { error: bcryptErr.message });
-            return res.redirect('/login?error=Service%20error');
-        }
+            const user = results[0];
+            try {
+                const ok = await bcrypt.compare(password + PEPPER, user.password);
+                if (!ok) {
+                    logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=wrong_password`);
+                    return res.redirect('/login?error=Invalid%20login');
+                }
+                logger.info(`SUCCESSFUL_LOGIN email=${email} ip=${req.ip}`);
+
+                const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
+                const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
+                res.cookie('token', token, {
+                    httpOnly: true,
+                    sameSite: 'lax',
+                    secure: process.env.NODE_ENV === 'production',
+                    maxAge: 2 * 60 * 60 * 1000
+                });
+                req.session.user = payloadUser;
+                res.redirect('/profile');
+            } catch (bcryptErr) {
+                logger.error('Bcrypt error', { error: bcryptErr.message });
+                return res.redirect('/login?error=Service%20error');
+            }
+        });
     });
 });
 
@@ -628,7 +661,7 @@ app.listen(PORT, () => {
     logger.info(`🔌 Connection: ${process.env.INSTANCE_CONNECTION_NAME ? 'Cloud SQL (Unix socket)' : 'Local MySQL (TCP)'}`);
     logger.info(`🗄️  Database: ${dbConfig.database}`);
     logger.info(`🔒 CSRF tokens required on all state-changing requests`);
-    logger.info(`📊 Rate limiting enabled with proxy support`);
+    logger.info(`📊 Custom rate limiting implemented (no external dependencies)`);
     logger.info(`🔧 Trust proxy: ${app.get('trust proxy')}`);
     logger.info('✅ Ready for Burp Suite testing and ethical hacking report');
     logger.info('═══════════════════════════════════════════════════════════');
