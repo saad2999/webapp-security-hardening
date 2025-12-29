@@ -20,32 +20,9 @@ const cors = require('cors');
 const csrf = require('@dr.pogodin/csurf');
 
 const app = express();
-app.set('trust proxy', 1);  // Trusts GCP proxy for correct IPs
-const limiterOptions = {
-    windowMs: 15 * 60 * 1000,
-    standardHeaders: true,
-    legacyHeaders: false,
 
-
-    validate: {
-        xForwardedForHeader: false,
-        forwardedHeader: false
-    },
-
-    keyGenerator: (req) => req.ip
-};
-
-
-// Layouts and views
-app.use(expressLayout);
-app.set('layout', 'layout');
-app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
-
-app.use(morgan('dev'));
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
-app.use(express.static('public'));
+// Trust proxy - MUST be before rate limiters
+app.set('trust proxy', 1);
 
 // Winston Logger (Initialize FIRST)
 const logger = winston.createLogger({
@@ -62,6 +39,17 @@ const logger = winston.createLogger({
     ]
 });
 app.set('logger', logger);
+
+// Layouts and views
+app.use(expressLayout);
+app.set('layout', 'layout');
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+app.use(morgan('dev'));
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
+app.use(express.static('public'));
 
 // Session with secure config
 app.use(session({
@@ -109,7 +97,7 @@ app.use(helmet({
 // CSRF Protection
 const csrfProtection = csrf({
     cookie: {
-        httpOnly: false,
+        httpOnly: false, // Must be false to allow client-side access if needed
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax'
     }
@@ -120,16 +108,24 @@ const PEPPER = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025DoNotShare!
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in-production';
 const SALT_ROUNDS = 12;
 
-// Rate limiting
-const globalLimiter = rateLimit({
-    ...limiterOptions,
-    max: 200
+// Rate limiting - FIXED configuration
+const globalLimiter = rateLimit({ 
+    windowMs: 15 * 60 * 1000, 
+    max: 200, 
+    standardHeaders: true, 
+    legacyHeaders: false,
+    skip: () => process.env.NODE_ENV === 'development' // Skip in dev
 });
 
-const loginLimiter = rateLimit({
-    ...limiterOptions,
-    max: 10
-});app.use(globalLimiter);
+const loginLimiter = rateLimit({ 
+    windowMs: 15 * 60 * 1000, 
+    max: 10, 
+    standardHeaders: true, 
+    legacyHeaders: false,
+    skip: () => process.env.NODE_ENV === 'development' // Skip in dev
+});
+
+app.use(globalLimiter);
 
 // Auth middleware
 app.use((req, res, next) => {
@@ -270,22 +266,42 @@ app.get('/', (req, res) => res.render('index'));
 app.get('/login', (req, res) => res.render('login'));
 app.get('/signup', (req, res) => res.render('signup'));
 
+app.get('/logout', (req, res) => {
+    res.clearCookie('token');
+    req.session.destroy(() => {});
+    res.redirect('/');
+});
+
+// Profile route - SINGLE VERSION with proper CSRF
 app.get('/profile', (req, res) => {
     if (!res.locals.user) {
+        logger.warn('Unauthenticated access to /profile');
         return res.redirect('/login');
     }
 
+    // Apply CSRF protection and render
     csrfProtection(req, res, (err) => {
         if (err) {
-            return res.redirect('/?error=Security%20token%20expired');
+            logger.error('CSRF error during profile load', { error: err.message, code: err.code });
+            return res.redirect('/?error=Security%20token%20error');
         }
 
-        res.render('profile', {
-            csrfToken: req.csrfToken()
-        });
+        try {
+            const token = req.csrfToken();
+            logger.info('Profile page loaded successfully', { 
+                userId: res.locals.user.id,
+                csrfToken: token.substring(0, 10) + '...'
+            });
+            
+            res.render('profile', {
+                csrfToken: token
+            });
+        } catch (e) {
+            logger.error('Error generating CSRF token', { error: e.message });
+            return res.redirect('/?error=Security%20error');
+        }
     });
 });
-
 
 // Login (NO CSRF for login)
 app.post('/login', loginLimiter, (req, res) => {
@@ -310,23 +326,28 @@ app.post('/login', loginLimiter, (req, res) => {
         }
 
         const user = results[0];
-        const ok = await bcrypt.compare(password + PEPPER, user.password);
-        if (!ok) {
-            logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=wrong_password`);
-            return res.redirect('/login?error=Invalid%20login');
-        }
-        logger.info(`SUCCESSFUL_LOGIN email=${email} ip=${req.ip}`);
+        try {
+            const ok = await bcrypt.compare(password + PEPPER, user.password);
+            if (!ok) {
+                logger.warn(`FAILED_LOGIN email=${email} ip=${req.ip} reason=wrong_password`);
+                return res.redirect('/login?error=Invalid%20login');
+            }
+            logger.info(`SUCCESSFUL_LOGIN email=${email} ip=${req.ip}`);
 
-        const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
-        const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
-        res.cookie('token', token, {
-            httpOnly: true,
-            sameSite: 'lax',
-            secure: process.env.NODE_ENV === 'production',
-            maxAge: 2 * 60 * 60 * 1000
-        });
-        req.session.user = payloadUser;
-        res.redirect('/profile');
+            const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
+            const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
+            res.cookie('token', token, {
+                httpOnly: true,
+                sameSite: 'lax',
+                secure: process.env.NODE_ENV === 'production',
+                maxAge: 2 * 60 * 60 * 1000
+            });
+            req.session.user = payloadUser;
+            res.redirect('/profile');
+        } catch (bcryptErr) {
+            logger.error('Bcrypt error', { error: bcryptErr.message });
+            return res.redirect('/login?error=Service%20error');
+        }
     });
 });
 
@@ -514,25 +535,10 @@ function requireAuthApi(req, res, next) {
     }
 }
 
-app.get('/profile', (req, res, next) => {
-    if (!res.locals.user) {
-        logger.warn('Unauthenticated access to /profile');
-        return res.redirect('/login');
-    }
-
-    csrfProtection(req, res, (err) => {
-        if (err) {
-            logger.error('CSRF error during profile load', { error: err.message });
-            return res.redirect('/?error=Security%20token%20expired');
-        }
-
-        res.locals.csrfToken = req.csrfToken();
-
-        logger.info('Profile page loaded successfully', { userId: res.locals.user.id });
-
-        res.render('profile');
-    });
+app.get('/api/profile', requireAuthApi, (req, res) => {
+    res.json({ user: req.user });
 });
+
 app.post('/api/update-bio', requireAuthApi, csrfProtection, (req, res) => {
     const rawBio = req.body.bio || '';
     const bioCheck = validator.validateBio(rawBio);
@@ -571,7 +577,7 @@ app.use((err, req, res, next) => {
         if (req.path.startsWith('/api/')) {
             return res.status(403).json({ error: 'Invalid CSRF token' });
         }
-        return res.redirect('/profile?error=Security%20token%20expired');
+        return res.redirect('/profile?error=Security%20token%20expired.%20Please%20refresh');
     }
 
     // Don't redirect for API endpoints
