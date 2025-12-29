@@ -100,47 +100,15 @@ const csrfProtection = csrf({
     }
 });
 
-// Smart CSRF middleware
-app.use((req, res, next) => {
-    if (req.path === '/login' && req.headers['content-type'] === 'application/json') {
-        return next();
-    }
-
-    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-        return csrfProtection(req, res, (err) => {
-            if (!err && typeof req.csrfToken === 'function') {
-                try {
-                    res.locals.csrfToken = req.csrfToken();
-                } catch (e) { 
-                    logger.warn('CSRF token generation failed', { error: e.message });
-                }
-            }
-            next();
-        });
-    }
-
-    return csrfProtection(req, res, (err) => {
-        if (err) {
-            logger.error('CSRF validation failed', { 
-                error: err.message, 
-                path: req.path,
-                method: req.method 
-            });
-            return res.redirect(req.path.includes('profile') ? '/profile?error=Security%20token%20invalid' : '/?error=Security%20error');
-        }
-        next();
-    });
-});
+// Secrets
+const PEPPER = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025DoNotShare!@#';
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in-production';
+const SALT_ROUNDS = 12;
 
 // Rate limiting
 const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 app.use(globalLimiter);
-
-// Secrets
-const PEPPER = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025DoNotShare!@#';
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in-production';
-const SALT_ROUNDS = 12;
 
 // Auth middleware
 app.use((req, res, next) => {
@@ -255,8 +223,7 @@ const safeQuery = (sql, params = [], callback) => {
                 logger.error("Query error:", { 
                     error: err.message, 
                     code: err.code, 
-                    sql: sql.substring(0, 100),
-                    params: params 
+                    sql: sql.substring(0, 100)
                 });
                 
                 if (['ECONNRESET', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST'].includes(err.code)) {
@@ -282,8 +249,18 @@ app.get('/', (req, res) => res.render('index'));
 app.get('/login', (req, res) => res.render('login'));
 app.get('/signup', (req, res) => res.render('signup'));
 
-app.get('/profile', (req, res) => {
-    if (!res.locals.user) return res.redirect('/login');
+// Profile route with CSRF protection
+app.get('/profile', csrfProtection, (req, res) => {
+    if (!res.locals.user) {
+        logger.warn('Profile access without authentication');
+        return res.redirect('/login');
+    }
+    
+    logger.info('Profile page loaded', { 
+        userId: res.locals.user.id,
+        hasCsrfToken: !!res.locals.csrfToken 
+    });
+    
     res.render('profile');
 });
 
@@ -293,7 +270,7 @@ app.get('/logout', (req, res) => {
     res.redirect('/');
 });
 
-// Login
+// Login (NO CSRF for login)
 app.post('/login', loginLimiter, (req, res) => {
     const { email = '', password = '' } = req.body;
     
@@ -325,14 +302,19 @@ app.post('/login', loginLimiter, (req, res) => {
 
         const payloadUser = { id: user.id, email: user.email, name: user.name, bio: user.bio };
         const token = jwt.sign({ user: payloadUser }, JWT_SECRET, { expiresIn: '2h' });
-        res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 2 * 60 * 60 * 1000 });
+        res.cookie('token', token, { 
+            httpOnly: true, 
+            sameSite: 'lax', 
+            secure: process.env.NODE_ENV === 'production',
+            maxAge: 2 * 60 * 60 * 1000 
+        });
         req.session.user = payloadUser;
         res.redirect('/profile');
     });
 });
 
-// Signup
-app.post('/signup', ids.idsMiddleware, csrfProtection, async (req, res) => {
+// Signup (WITH CSRF and IDS)
+app.post('/signup', csrfProtection, ids.idsMiddleware, async (req, res) => {
     try {
         let { email, password, name, bio = '' } = req.body;
         
@@ -377,11 +359,16 @@ app.post('/signup', ids.idsMiddleware, csrfProtection, async (req, res) => {
     }
 });
 
-// Update Bio
-app.post('/update-bio', ids.idsMiddleware, csrfProtection, (req, res) => {
+// Update Bio (WITH CSRF and IDS)
+app.post('/update-bio', csrfProtection, ids.idsMiddleware, (req, res) => {
     const user = res.locals.user;
     
-    logger.info(`Bio update attempt`, { userId: user?.id, email: user?.email });
+    logger.info(`Bio update attempt`, { 
+        userId: user?.id, 
+        email: user?.email,
+        hasCsrfInBody: !!req.body._csrf,
+        csrfValue: req.body._csrf?.substring(0, 10) + '...'
+    });
     
     if (!user) {
         logger.warn('Bio update attempted without authentication');
@@ -390,7 +377,10 @@ app.post('/update-bio', ids.idsMiddleware, csrfProtection, (req, res) => {
 
     const rawBio = req.body.bio || '';
     
-    logger.info(`Bio content`, { rawBio: rawBio.substring(0, 50), length: rawBio.length });
+    logger.info(`Bio content`, { 
+        rawBio: rawBio.substring(0, 50), 
+        length: rawBio.length 
+    });
     
     const bioCheck = validator.validateBio(rawBio);
     if (!bioCheck.ok) {
@@ -405,7 +395,7 @@ app.post('/update-bio', ids.idsMiddleware, csrfProtection, (req, res) => {
 
     safeQuery('UPDATE users SET bio = ? WHERE id = ?', [bioCheck.sanitized, user.id], (err, results) => {
         if (err) {
-            logger.error("Bio update failed", { 
+            logger.error("Bio update DB failed", { 
                 error: err.message, 
                 code: err.code,
                 userId: user.id 
@@ -437,11 +427,14 @@ app.post('/update-bio', ids.idsMiddleware, csrfProtection, (req, res) => {
     });
 });
 
-// Change Password
-app.post('/change-password', ids.idsMiddleware, csrfProtection, async (req, res) => {
+// Change Password (WITH CSRF and IDS)
+app.post('/change-password', csrfProtection, ids.idsMiddleware, async (req, res) => {
     const user = res.locals.user;
     
-    logger.info(`Password change attempt`, { userId: user?.id });
+    logger.info(`Password change attempt`, { 
+        userId: user?.id,
+        hasCsrfInBody: !!req.body._csrf 
+    });
     
     if (!user) {
         logger.warn('Password change attempted without authentication');
@@ -449,6 +442,12 @@ app.post('/change-password', ids.idsMiddleware, csrfProtection, async (req, res)
     }
 
     const newPassword = req.body.newPassword;
+    
+    if (!newPassword) {
+        logger.warn('Password change without password');
+        return res.redirect('/profile?error=Password%20required');
+    }
+    
     const pwdCheck = validator.validatePassword(newPassword);
     if (!pwdCheck.ok) {
         logger.warn('Weak password in change attempt');
@@ -458,16 +457,25 @@ app.post('/change-password', ids.idsMiddleware, csrfProtection, async (req, res)
     try {
         const hashed = await bcrypt.hash(newPassword + PEPPER, SALT_ROUNDS);
         
+        logger.info(`Executing password change query`, { userId: user.id });
+        
         safeQuery('UPDATE users SET password = ? WHERE id = ?', [hashed, user.id], (err, results) => {
             if (err) {
-                logger.error("Password change failed", { error: err.message, userId: user.id });
+                logger.error("Password change DB failed", { 
+                    error: err.message, 
+                    code: err.code,
+                    userId: user.id 
+                });
                 return res.redirect('/profile?error=Password%20change%20failed');
             }
-            logger.info(`Password changed successfully`, { userId: user.id });
+            logger.info(`Password changed successfully`, { 
+                userId: user.id,
+                affectedRows: results?.affectedRows 
+            });
             res.redirect('/profile?success=Password%20changed');
         });
     } catch (e) {
-        logger.error("Password hashing failed", { error: e.message });
+        logger.error("Password hashing failed", { error: e.message, stack: e.stack });
         res.redirect('/profile?error=Server%20error');
     }
 });
@@ -493,13 +501,7 @@ app.get('/api/profile', requireAuthApi, (req, res) => {
     res.json({ user: req.user });
 });
 
-app.post('/api/update-bio', requireAuthApi, (req, res) => {
-    const csrfToken = req.headers['x-csrf-token'] || req.body._csrf;
-    if (!csrfToken || !req.csrfToken || csrfToken !== req.csrfToken()) {
-        logger.warn('API bio update with invalid CSRF');
-        return res.status(403).json({ error: 'Invalid CSRF token' });
-    }
-
+app.post('/api/update-bio', requireAuthApi, csrfProtection, (req, res) => {
     const rawBio = req.body.bio || '';
     const bioCheck = validator.validateBio(rawBio);
     if (!bioCheck.ok) {
@@ -525,10 +527,20 @@ app.use((err, req, res, next) => {
         error: err.message, 
         stack: err.stack,
         path: req.path,
-        method: req.method 
+        method: req.method,
+        code: err.code 
     });
     
     if (res.headersSent) return next(err);
+    
+    // CSRF errors
+    if (err.code === 'EBADCSRFTOKEN') {
+        logger.error('CSRF token validation failed', { path: req.path });
+        if (req.path.startsWith('/api/')) {
+            return res.status(403).json({ error: 'Invalid CSRF token' });
+        }
+        return res.redirect('/profile?error=Security%20token%20expired');
+    }
     
     // Don't redirect for API endpoints
     if (req.path.startsWith('/api/')) {

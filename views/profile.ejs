@@ -21,9 +21,9 @@
                         <div class="card-body bg-black p-4 text-light" style="min-height: 200px; font-size: 1.1rem; ">
                             <% if (user.bio && user.bio.trim()) { %>
                                 <%= user.bio %>
-                                    <% } else { %>
-                                        <em class="text-muted fs-4">No bio added</em>
-                                        <% } %>
+                            <% } else { %>
+                                <em class="text-muted fs-4">No bio added</em>
+                            <% } %>
                         </div>
                     </div>
 
@@ -34,6 +34,9 @@
                         </div>
                         <div class="card-body">
                             <form method="POST" action="/update-bio">
+                                <!-- CSRF Token - REQUIRED for protection -->
+                                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
                                 <textarea name="bio" rows="6"
                                     class="form-control bg-black text-light border-secondary mb-3"
                                     placeholder="Try: <script>alert('XSS by Clearway Intern')</script>"><%= user.bio || '' %></textarea>
@@ -47,10 +50,13 @@
                 <div class="col-lg-5">
                     <div class="card bg-dark border-danger shadow-lg">
                         <div class="card-header bg-danger text-white">
-                            <h4>Change Password </h4>
+                            <h4>Change Password</h4>
                         </div>
                         <div class="card-body">
                             <form method="POST" action="/change-password">
+                                <!-- CSRF Token - REQUIRED for protection -->
+                                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
                                 <div class="mb-3">
                                     <input type="password" name="newPassword" class="form-control form-control-lg"
                                         placeholder="New password" required>
@@ -60,7 +66,6 @@
                             <div class="mt-3 p-3 bg-black rounded">
                                 <small class="text-danger">
                                     Password stored is encrypted!<br>
-
                                 </small>
                             </div>
                         </div>
