@@ -503,14 +503,12 @@ app.get('/profile', (req, res, next) => {
         return res.redirect('/login');
     }
 
-    // Apply CSRF only after session exists
     csrfProtection(req, res, (err) => {
         if (err) {
             logger.error('CSRF error during profile load', { error: err.message });
             return res.redirect('/?error=Security%20token%20expired');
         }
 
-        // Generate fresh token for the view
         res.locals.csrfToken = req.csrfToken();
 
         logger.info('Profile page loaded successfully', { userId: res.locals.user.id });
