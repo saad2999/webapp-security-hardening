@@ -270,14 +270,22 @@ app.get('/', (req, res) => res.render('index'));
 app.get('/login', (req, res) => res.render('login'));
 app.get('/signup', (req, res) => res.render('signup'));
 
-app.get('/profile', (req, res, next) => {
-    
+app.get('/profile', (req, res) => {
+    if (!res.locals.user) {
+        return res.redirect('/login');
+    }
+
     csrfProtection(req, res, (err) => {
-        
-        res.locals.csrfToken = req.csrfToken();
-        res.render('profile');
+        if (err) {
+            return res.redirect('/?error=Security%20token%20expired');
+        }
+
+        res.render('profile', {
+            csrfToken: req.csrfToken()
+        });
     });
 });
+
 
 // Login (NO CSRF for login)
 app.post('/login', loginLimiter, (req, res) => {
