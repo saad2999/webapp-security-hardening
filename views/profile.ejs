@@ -34,7 +34,9 @@
                         </div>
                         <div class="card-body">
                             <form method="POST" action="/update-bio">
-                                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                                <% if (typeof csrfToken !== 'undefined') { %>
+                                    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                                <% } %>
 
                                 <textarea name="bio" rows="6"
                                     class="form-control bg-black text-light border-secondary mb-3"
@@ -53,7 +55,9 @@
                         </div>
                         <div class="card-body">
                             <form method="POST" action="/change-password">
-                                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                                <% if (typeof csrfToken !== 'undefined') { %>
+                                    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                                <% } %>
 
                                 <div class="mb-3">
                                     <input type="password" name="newPassword" class="form-control form-control-lg"
