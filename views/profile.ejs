@@ -18,7 +18,7 @@
                         <div class="card-header bg-primary text-white">
                             <h3>Your Bio</h3>
                         </div>
-                        <div class="card-body bg-black p-4 text-light" style="min-height: 200px; font-size: 1.1rem; ">
+                        <div class="card-body bg-black p-4 text-light" style="min-height: 200px; font-size: 1.1rem;">
                             <% if (user.bio && user.bio.trim()) { %>
                                 <%= user.bio %>
                             <% } else { %>
@@ -27,14 +27,13 @@
                         </div>
                     </div>
 
-                    <!-- UPDATE BIO (XSS TEST) -->
+                    <!-- UPDATE BIO FORM (SECURED WITH CSRF) -->
                     <div class="card bg-dark border-warning">
                         <div class="card-header bg-warning text-dark">
                             <h4>Update Bio (SECURED)</h4>
                         </div>
                         <div class="card-body">
                             <form method="POST" action="/update-bio">
-                                <!-- CSRF Token - REQUIRED for protection -->
                                 <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
                                 <textarea name="bio" rows="6"
@@ -46,7 +45,7 @@
                     </div>
                 </div>
 
-                <!-- PASSWORD CHANGE -->
+                <!-- PASSWORD CHANGE & LOGOUT -->
                 <div class="col-lg-5">
                     <div class="card bg-dark border-danger shadow-lg">
                         <div class="card-header bg-danger text-white">
@@ -54,7 +53,6 @@
                         </div>
                         <div class="card-body">
                             <form method="POST" action="/change-password">
-                                <!-- CSRF Token - REQUIRED for protection -->
                                 <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
                                 <div class="mb-3">
@@ -65,7 +63,7 @@
                             </form>
                             <div class="mt-3 p-3 bg-black rounded">
                                 <small class="text-danger">
-                                    Password stored is encrypted!<br>
+                                    Password stored encrypted with bcrypt + pepper!
                                 </small>
                             </div>
                         </div>

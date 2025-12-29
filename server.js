@@ -497,10 +497,27 @@ function requireAuthApi(req, res, next) {
     }
 }
 
-app.get('/api/profile', requireAuthApi, (req, res) => {
-    res.json({ user: req.user });
-});
+app.get('/profile', (req, res, next) => {
+    if (!res.locals.user) {
+        logger.warn('Unauthenticated access to /profile');
+        return res.redirect('/login');
+    }
 
+    // Apply CSRF only after session exists
+    csrfProtection(req, res, (err) => {
+        if (err) {
+            logger.error('CSRF error during profile load', { error: err.message });
+            return res.redirect('/?error=Security%20token%20expired');
+        }
+
+        // Generate fresh token for the view
+        res.locals.csrfToken = req.csrfToken();
+
+        logger.info('Profile page loaded successfully', { userId: res.locals.user.id });
+
+        res.render('profile');
+    });
+});
 app.post('/api/update-bio', requireAuthApi, csrfProtection, (req, res) => {
     const rawBio = req.body.bio || '';
     const bioCheck = validator.validateBio(rawBio);
