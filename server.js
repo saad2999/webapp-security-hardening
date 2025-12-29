@@ -22,7 +22,8 @@ const csrf = require('@dr.pogodin/csurf');
 const app = express();
 
 // Trust proxy - MUST be FIRST before any rate limiters
-app.set('trust proxy', true); // Changed to true for Cloud Run
+// '1' is the standard setting for Cloud Run (trusts the first hop load balancer)
+app.set('trust proxy', 1);
 
 // Winston Logger
 const logger = winston.createLogger({
@@ -114,7 +115,11 @@ const globalLimiter = rateLimit({
     max: 200,
     standardHeaders: true,
     legacyHeaders: false,
-    // Disable validation that's causing errors
+    // Fix: Explicitly use req.ip resolved by Express
+    keyGenerator: (req, res) => {
+        return req.ip;
+    },
+    // Fix: Disable conflicting validations
     validate: {
         xForwardedForHeader: false,
         trustProxy: false
@@ -126,7 +131,11 @@ const loginLimiter = rateLimit({
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
-    // Disable validation that's causing errors
+    // Fix: Explicitly use req.ip resolved by Express
+    keyGenerator: (req, res) => {
+        return req.ip;
+    },
+    // Fix: Disable conflicting validations
     validate: {
         xForwardedForHeader: false,
         trustProxy: false
