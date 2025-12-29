@@ -115,9 +115,15 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-2025-change-in
 const SALT_ROUNDS = 12;
 
 // Rate limiting
-const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false });
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
-app.use(globalLimiter);
+const globalLimiter = rateLimit({
+    ...limiterOptions,
+    max: 200
+});
+
+const loginLimiter = rateLimit({
+    ...limiterOptions,
+    max: 10
+});app.use(globalLimiter);
 
 // Auth middleware
 app.use((req, res, next) => {
