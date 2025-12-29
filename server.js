@@ -270,25 +270,13 @@ app.get('/', (req, res) => res.render('index'));
 app.get('/login', (req, res) => res.render('login'));
 app.get('/signup', (req, res) => res.render('signup'));
 
-// Profile route with CSRF protection
-app.get('/profile', csrfProtection, (req, res) => {
-    if (!res.locals.user) {
-        logger.warn('Profile access without authentication');
-        return res.redirect('/login');
-    }
-
-    logger.info('Profile page loaded', {
-        userId: res.locals.user.id,
-        hasCsrfToken: !!res.locals.csrfToken
+app.get('/profile', (req, res, next) => {
+    
+    csrfProtection(req, res, (err) => {
+        
+        res.locals.csrfToken = req.csrfToken();
+        res.render('profile');
     });
-
-    res.render('profile');
-});
-
-app.get('/logout', (req, res) => {
-    res.clearCookie('token');
-    req.session.destroy(() => { });
-    res.redirect('/');
 });
 
 // Login (NO CSRF for login)
