@@ -20,13 +20,21 @@ const cors = require('cors');
 const csrf = require('@dr.pogodin/csurf');
 
 const app = express();
+app.set('trust proxy', 1);  // Trusts GCP proxy for correct IPs
+const limiterOptions = {
+    windowMs: 15 * 60 * 1000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        return req.ip; // now safe because trust proxy = 1
+    }
+};
 
 // Layouts and views
 app.use(expressLayout);
 app.set('layout', 'layout');
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
-app.set('trust proxy', 1);  // Trusts GCP proxy for correct IPs
 
 app.use(morgan('dev'));
 app.use(bodyParser.urlencoded({ extended: false }));
