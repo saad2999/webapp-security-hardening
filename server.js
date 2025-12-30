@@ -74,6 +74,24 @@ app.use(expressLayout);
 app.set('layout', 'layout');
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+// 
+
+// Security headers - Combined into one call
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            upgradeInsecureRequests: [],
+        },
+    },
+    hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true
+    }
+}));
 
 // Logging middleware
 app.use(morgan('combined', {
@@ -109,35 +127,8 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token']
 }));
 
-// Security headers
-app.use(helmet({
-    contentSecurityPolicy: false, // Disable for now to simplify
-    crossOriginEmbedderPolicy: false
-}));
-const helmet = require('helmet');
-app.use(helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["'self'"],
-            objectSrc: ["'none'"],
-            upgradeInsecureRequests: [],
-        },
-    },
-    hsts: {
-        maxAge: 31536000,
-        includeSubDomains: true,
-        preload: true
-    }
-}));
-// CSRF Protection
-const csrfProtection = csrf({
-    cookie: {
-        httpOnly: false,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax'
-    }
-});
+
+
 
 // ======================
 // 3. DATABASE CONFIGURATION
