@@ -20,37 +20,44 @@ const csrf = require('@dr.pogodin/csurf');
 const app = express();
 
 // ======================
-// 1. SECURITY HEADERS & PROXY (Week 4 Task 3)
+// 1. SECURITY & MONITORING (Week 4 Tasks) [cite: 7, 10, 14]
 // ======================
-app.set('trust proxy', 1); // Trust Cloud Run Load Balancer 
 
+// Trust Cloud Run Proxy for Rate Limiting [cite: 11]
+app.set('trust proxy', 1);
+
+// Security Headers & CSP Implementation [cite: 14, 15, 16]
 app.use(helmet({
-    contentSecurityPolicy: { // CSP Implementation [cite: 14, 15]
+    contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
             scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", "data:"],
-            upgradeInsecureRequests: [], // Enforce HTTPS [cite: 16]
+            upgradeInsecureRequests: [], 
         },
     },
-    hsts: { // HSTS Enforcement [cite: 16]
+    hsts: {
         maxAge: 31536000,
         includeSubDomains: true,
         preload: true
     }
 }));
 
-// Monitoring & Logging (Week 4 Task 1) [cite: 7, 8]
+// Real-time Monitoring Logger (Week 4 Task 1) [cite: 7, 8, 9]
 const logger = winston.createLogger({
     level: process.env.LOG_LEVEL || 'info',
-    format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json()
+    ),
     transports: [new winston.transports.Console()]
 });
 
 // ======================
-// 2. MIDDLEWARE & API HARDENING (Week 4 Task 2)
+// 2. MIDDLEWARE SETUP
 // ======================
+
 app.use(expressLayout);
 app.set('view engine', 'ejs');
 app.use(express.static('public'));
@@ -58,9 +65,9 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
-// CORS configuration 
+// API Security: Properly configure CORS (Week 4 Task 2) [cite: 10, 12]
 app.use(cors({
-    origin: process.env.ALLOWED_ORIGIN || false, 
+    origin: process.env.ALLOWED_ORIGIN || false,
     credentials: true
 }));
 
@@ -76,16 +83,16 @@ app.use(session({
     }
 }));
 
-// CSRF Protection Implementation (Week 5 Task 3) [cite: 31, 32]
+// CSRF Protection Middleware (Week 5 Task 3) [cite: 31, 32]
 const csrfProtection = csrf({
     cookie: {
-        httpOnly: true, // Prevents client-side access (Fixes Burp Suite vulnerability)
+        httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax'
     }
 });
 
-// Rate Limiting (Week 4 Task 2) [cite: 10, 11]
+// API Security: Rate Limiting (Week 4 Task 2) [cite: 10, 11]
 class SimpleRateLimiter {
     constructor(windowMs, max) {
         this.windowMs = windowMs;
@@ -98,8 +105,9 @@ class SimpleRateLimiter {
             const now = Date.now();
             if (!this.hits.has(clientIp)) this.hits.set(clientIp, []);
             const hits = this.hits.get(clientIp).filter(t => t > now - this.windowMs);
+            
             if (hits.length >= this.max) {
-                logger.warn(`Rate limit exceeded for IP: ${clientIp}`); // Alert monitoring [cite: 9]
+                logger.warn(`Alert: Rate limit exceeded`, { ip: clientIp, path: req.path });
                 return res.status(429).json({ error: 'Too many requests' });
             }
             hits.push(now);
@@ -112,9 +120,10 @@ const globalLimiter = new SimpleRateLimiter(15 * 60 * 1000, 200);
 app.use(globalLimiter.middleware());
 
 // ======================
-// 3. DATABASE CONFIGURATION
+// 3. DATABASE (SQLi Prevention - Week 5 Task 2) 
 // ======================
-const pool = mysql.createPool({
+
+const dbConfig = {
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'Clearway_Cyber_db',
@@ -122,10 +131,12 @@ const pool = mysql.createPool({
     host: process.env.DB_HOST || '127.0.0.1',
     waitForConnections: true,
     connectionLimit: 10
-});
+};
+
+const pool = mysql.createPool(dbConfig);
 
 // ======================
-// 4. SECURED ROUTES (Week 5 Task 2 & 3)
+// 4. ROUTES & AUTHENTICATION
 // ======================
 
 app.use((req, res, next) => {
@@ -135,7 +146,7 @@ app.use((req, res, next) => {
             const payload = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
             res.locals.user = payload.user;
             req.user = payload.user;
-        } catch (e) { logger.debug('JWT Verification Failed'); }
+        } catch (e) { logger.debug('Invalid JWT'); }
     }
     next();
 });
@@ -143,9 +154,19 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => res.render('index'));
 app.get('/login', (req, res) => res.render('login'));
 app.get('/signup', csrfProtection, (req, res) => res.render('signup', { csrfToken: req.csrfToken() }));
+
 app.get('/profile', csrfProtection, (req, res) => {
     if (!req.user) return res.redirect('/login');
     res.render('profile', { user: req.user, csrfToken: req.csrfToken() });
+});
+
+// LOGOUT ENDPOINT (Clear cookies & session)
+app.get('/logout', (req, res) => {
+    res.clearCookie('token');
+    req.session.destroy((err) => {
+        if (err) logger.error('Logout failed', err);
+        res.redirect('/login');
+    });
 });
 
 // SECURE UPDATE BIO (SQLi & CSRF Protected) [cite: 30, 32]
@@ -156,11 +177,11 @@ app.post('/update-bio', csrfProtection, ids.idsMiddleware, async (req, res) => {
     if (!bioCheck.ok) return res.redirect('/profile?error=Invalid bio');
 
     try {
-        // PREPARED STATEMENT Prevents SQLi 
+        // PREPARED STATEMENTS to prevent SQL Injection [cite: 30]
         await pool.execute('UPDATE users SET bio = ? WHERE id = ?', [bioCheck.sanitized, req.user.id]);
         res.redirect('/profile?success=Bio updated');
     } catch (error) {
-        logger.error('Bio Update Error', error);
+        logger.error('Database Error during bio update', error);
         res.redirect('/profile?error=Update failed');
     }
 });
@@ -175,16 +196,15 @@ app.post('/change-password', csrfProtection, ids.idsMiddleware, async (req, res)
     try {
         const pepper = process.env.PEPPER || 'ClearwayCyberHardenedPepper2025';
         const hashed = await bcrypt.hash(newPassword + pepper, 12);
-        // PREPARED STATEMENT Prevents SQLi 
+        // PREPARED STATEMENTS to prevent SQL Injection [cite: 30]
         await pool.execute('UPDATE users SET password = ? WHERE id = ?', [hashed, req.user.id]);
         res.redirect('/profile?success=Password changed');
     } catch (error) {
-        logger.error('Password Change Error', error);
-        res.redirect('/profile?error=Failed to change password');
+        logger.error('Database Error during password change', error);
+        res.redirect('/profile?error=Change failed');
     }
 });
 
-// Health check endpoint for Cloud Run
 app.get('/health', async (req, res) => {
     try {
         await pool.query('SELECT 1');
