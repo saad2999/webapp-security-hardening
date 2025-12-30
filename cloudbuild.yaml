@@ -3,11 +3,11 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA', '.']
 
-  # Step 2: Push the image
+  # Step 2: Push the image to Artifact Registry (gcr.io)
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA']
 
-  # Step 3: Deploy to Cloud Run
+  # Step 3: Deploy to Cloud Run with explicit runtime service account
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
@@ -15,22 +15,21 @@ steps:
       - |
         gcloud run deploy webapp \
           --image gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA \
-          --region ${_REGION} \
+          --region ${_REGION:-us-central1} \
           --platform managed \
           --allow-unauthenticated \
-          --service-account webapp-deployer@$PROJECT_ID.iam.gserviceaccount.com \
-          --add-cloudsql-instances=${_CLOUDSQL_INSTANCE} \
-          --set-env-vars "NODE_ENV=production,INSTANCE_CONNECTION_NAME=${_CLOUDSQL_INSTANCE},DB_NAME=Clearway_Cyber_db,DB_USER=root"
+          --service-account webapp-deployer@project-dd3fa7a3-d0dc-4556-8d3.iam.gserviceaccount.com \
+          --set-env-vars "NODE_ENV=production" \
+          ${_CLOUDSQL_INSTANCE:+--add-cloudsql-instances=${_CLOUDSQL_INSTANCE}}
 
 substitutions:
   _REGION: "us-central1"
-  _CLOUDSQL_INSTANCE: "project-dd3fa7a3-d0dc-4556-8d3:us-central1:clearway-sql"
+  _CLOUDSQL_INSTANCE: ""
 
 images:
   - 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA'
 
-# THIS SECTION FIXES YOUR ERROR
+timeout: 1200s
+
 options:
   logging: CLOUD_LOGGING_ONLY
-  # This ensures the build uses the project default service account 
-  # for the build process itself, while Step 3 uses your custom account for the RUNTIME.
