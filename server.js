@@ -110,22 +110,12 @@ app.use(cors({
 }));
 
 // Security headers
-// Security headers (Combined and Corrected)
 app.use(helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["'self'"],
-            objectSrc: ["'none'"],
-            upgradeInsecureRequests: [],
-        },
-    },
-    hsts: {
-        maxAge: 31536000,
-        includeSubDomains: true,
-        preload: true
-    }
-}));// CSRF Protection
+    contentSecurityPolicy: false, // Disable for now to simplify
+    crossOriginEmbedderPolicy: false
+}));
+
+// CSRF Protection
 const csrfProtection = csrf({
     cookie: {
         httpOnly: false,
