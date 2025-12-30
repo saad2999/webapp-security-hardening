@@ -28,3 +28,9 @@ substitutions:
 
 images:
   - 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA'
+
+# THIS SECTION FIXES YOUR ERROR
+options:
+  logging: CLOUD_LOGGING_ONLY
+  # This ensures the build uses the project default service account 
+  # for the build process itself, while Step 3 uses your custom account for the RUNTIME.
