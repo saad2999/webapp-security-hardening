@@ -102,18 +102,26 @@ app.use(session({
 app.use(cookieParser());
 
 // CORS configuration
-app.use(cors({
-    origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
-    credentials: true,
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token']
-}));
+// Update CORS settings in server.js:
+const corsOptions = {
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://webapp-280471123426.us-central1.run.app', 
+       'https://your-frontend-domain.com']
+    : ['http://localhost:3000', 'http://localhost:8080'],
+  credentials: true,
+  // ... other options
+};
 
 // Security headers
 app.use(helmet({
     contentSecurityPolicy: false, // Disable for now to simplify
-    crossOriginEmbedderPolicy: false
+    crossOriginEmbedderPolicy: false,
+  xContentTypeOptions: true, 
 }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  next();
+});
 
 // CSRF Protection
 const csrfProtection = csrf({
