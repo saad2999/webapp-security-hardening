@@ -117,11 +117,8 @@ app.use(helmet({
 
 // CSRF Protection
 const csrfProtection = csrf({
-    cookie: {
-        httpOnly: false,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax'
-    }
+  cookie: false, // Do not use a cookie, use session
+  sessionKey: 'session', // This is the default, but we are using express-session so it's fine
 });
 
 // ======================
