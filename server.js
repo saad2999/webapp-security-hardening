@@ -114,7 +114,22 @@ app.use(helmet({
     contentSecurityPolicy: false, // Disable for now to simplify
     crossOriginEmbedderPolicy: false
 }));
-
+const helmet = require('helmet');
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            upgradeInsecureRequests: [],
+        },
+    },
+    hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true
+    }
+}));
 // CSRF Protection
 const csrfProtection = csrf({
     cookie: {
@@ -309,21 +324,35 @@ app.get('/logout', (req, res) => {
 
 // Profile endpoint
 app.get('/profile', csrfProtection, (req, res) => {
-    if (!res.locals.user) {
-        logger.warn('Unauthenticated access to profile');
-        return res.redirect('/login');
+    // 1. Use req.user directly (more reliable than res.locals for logic)
+    const user = req.user || res.locals.user;
+    
+    if (!user) {
+        logger.warn('Unauthenticated access attempt to profile blocked', { 
+            ip: req.ip,
+            userAgent: req.get('User-Agent') 
+        });
+        return res.redirect('/login?error=Please login first');
     }
     
     try {
+        // 2. Generate the CSRF token
         const token = req.csrfToken();
-        res.render('profile', { csrfToken: token });
+        
+        // 3. Explicitly pass both the user and the token to the view
+        // This ensures the EJS template has everything it needs to render securely
+        res.render('profile', { 
+            user: user, 
+            csrfToken: token,
+            title: 'Your Secure Profile'
+        });
+        
     } catch (error) {
-        logger.error('CSRF token generation failed:', error);
-        res.redirect('/?error=Security error');
+        logger.error('CRITICAL: CSRF token generation failed:', error);
+        // If security tokens fail to generate, do not let the user proceed
+        res.status(500).redirect('/?error=Security initialization failed');
     }
-});
-
-// Login route with rate limiting
+});// Login route with rate limiting
 app.post('/login', loginLimiter.middleware(), async (req, res) => {
     const { email = '', password = '' } = req.body;
     logger.info('Login attempt', { email: email.substring(0, 3) + '***', ip: req.ip });
@@ -426,9 +455,11 @@ app.post('/signup', csrfProtection, ids.idsMiddleware, async (req, res) => {
 
 // Update bio route
 app.post('/update-bio', csrfProtection, ids.idsMiddleware, async (req, res) => {
-    const user = res.locals.user;
+    // 1. Use req.user (populated by your auth middleware)
+    const user = req.user; 
     
     if (!user) {
+        logger.warn('Unauthorized bio update attempt blocked');
         return res.redirect('/login');
     }
 
@@ -436,21 +467,25 @@ app.post('/update-bio', csrfProtection, ids.idsMiddleware, async (req, res) => {
     const bioCheck = validator.validateBio(rawBio);
     
     if (!bioCheck.ok) {
-        return res.redirect('/profile?error=Invalid bio');
+        return res.redirect('/profile?error=Invalid bio content');
     }
 
     try {
+        // 2. PREPARED STATEMENT (Week 5 Task: SQLi Prevention)
+        // This is correct: placeholders (?) ensure bio data isn't executed as SQL
         await pool.execute('UPDATE users SET bio = ? WHERE id = ?', [bioCheck.sanitized, user.id]);
         
+        // 3. Update local user data
         const updatedUser = { ...user, bio: bioCheck.sanitized };
-        req.session.user = updatedUser;
         
+        // 4. Update JWT (Use a strict secret, no weak fallbacks)
         const token = jwt.sign(
             { user: updatedUser }, 
-            process.env.JWT_SECRET || 'fallback-secret',
+            process.env.JWT_SECRET, // If this is undefined, it will throw an error (Good!)
             { expiresIn: '2h' }
         );
         
+        // 5. Update Cookie with Security Flags (Week 4 Task)
         res.cookie('token', token, {
             httpOnly: true,
             sameSite: 'lax',
@@ -458,11 +493,19 @@ app.post('/update-bio', csrfProtection, ids.idsMiddleware, async (req, res) => {
             maxAge: 2 * 60 * 60 * 1000
         });
         
-        res.redirect('/profile?success=Bio updated');
+        // 6. Force session save before redirect
+        req.session.user = updatedUser;
+        req.session.save((err) => {
+            if (err) logger.error('Session save error:', err);
+            res.redirect('/profile?success=Bio updated successfully');
+        });
         
     } catch (error) {
-        logger.error('Bio update error:', error);
-        res.redirect('/profile?error=Update failed');
+        logger.error('Bio update database error:', {
+            userId: user.id,
+            error: error.message
+        });
+        res.redirect('/profile?error=Update failed due to server error');
     }
 });
 
