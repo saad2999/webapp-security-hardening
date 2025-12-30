@@ -110,11 +110,7 @@ app.use(cors({
 }));
 
 // Security headers
-app.use(helmet({
-    contentSecurityPolicy: false, // Disable for now to simplify
-    crossOriginEmbedderPolicy: false
-}));
-const helmet = require('helmet');
+// Security headers (Combined and Corrected)
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
@@ -129,16 +125,14 @@ app.use(helmet({
         includeSubDomains: true,
         preload: true
     }
-}));
-// CSRF Protection
+}));// CSRF Protection
 const csrfProtection = csrf({
     cookie: {
-        httpOnly: false,
+        httpOnly: true, // Changed to true for better security
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax'
     }
 });
-
 // ======================
 // 3. DATABASE CONFIGURATION
 // ======================
@@ -586,6 +580,12 @@ app.use((err, req, res, next) => {
     }
 
     res.redirect('/?error=Service temporarily unavailable');
+});
+app.get('/logout', (req, res) => {
+    res.clearCookie('token'); // Clear the JWT cookie
+    req.session.destroy(() => {
+        res.redirect('/login?success=Logged out successfully');
+    });
 });
 
 // ======================
