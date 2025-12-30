@@ -3,7 +3,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA', '.']
 
-  # Step 2: Push the image to Artifact Registry (gcr.io)
+  # Step 2: Push the image
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA']
 
@@ -24,13 +24,7 @@ steps:
 
 substitutions:
   _REGION: "us-central1"
-  # Replace with your actual connection name from the Google Cloud Console
   _CLOUDSQL_INSTANCE: "project-dd3fa7a3-d0dc-4556-8d3:us-central1:clearway-sql"
 
 images:
   - 'gcr.io/$PROJECT_ID/webapp:$COMMIT_SHA'
-
-timeout: 1200s
-
-options:
-  logging: CLOUD_LOGGING_ONLY
