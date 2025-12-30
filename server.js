@@ -42,6 +42,18 @@ const logger = winston.createLogger({
 });
 
 logger.info('🚀 Starting Clearway Cyber application on Cloud Run');
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https:"],
+            objectSrc: ["'none'"],
+            upgradeInsecureRequests: []
+        }
+    },
+    hsts: { maxAge: 31536000, includeSubDomains: true, preload: true }
+}));
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
@@ -116,33 +128,7 @@ app.use(cors({
 }));
 
 // Enhanced security headers
-app.use(helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-            styleSrc: ["'self'", "'unsafe-inline'", "https:"],
-            imgSrc: ["'self'", "data:", "https:"],
-            connectSrc: ["'self'"],
-            fontSrc: ["'self'", "https:"],
-            objectSrc: ["'none'"],
-            mediaSrc: ["'self'"],
-            frameSrc: ["'none'"],
-            frameAncestors: ["'none'"],
-            formAction: ["'self'"], // Restrict form submissions
-            upgradeInsecureRequests: []
-        }
-    },
-    hsts: {
-        maxAge: 31536000,
-        includeSubDomains: true,
-        preload: true
-    },
-    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
-    xFrameOptions: { action: 'deny' },
-    xContentTypeOptions: true,
-    xXssProtection: { reportUri: '/report-xss' }
-}));
+
 
 // ======================
 // 3. ENHANCED CSRF PROTECTION
