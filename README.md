@@ -4,7 +4,6 @@
 [![Express](https://img.shields.io/badge/Express-v4-blue)](https://expressjs.com/)
 [![Google Cloud Run](https://img.shields.io/badge/Deployed-Google%20Cloud%20Run-blue)](https://cloud.google.com/run)
 
-**Live Demo:** [https://webapp-280471123426.us-central1.run.app/](https://webapp-280471123426.us-central1.run.app/)
 
 This repository documents my **6-week Cybersecurity Internship project (November–December 2025)** focused on systematically hardening a deliberately vulnerable **Node.js + Express + MySQL** web application.
 
@@ -90,6 +89,5 @@ Starting from a highly insecure baseline (XSS, SQL Injection, plaintext password
 
 The fully hardened application is live on **Google Cloud Run**:
 
-🔗 **Live Secure Application:** [https://webapp-280471123426.us-central1.run.app/](https://webapp-280471123426.us-central1.run.app/)
 
 Features strong TLS, HTTP/3, and Google-managed infrastructure security.
